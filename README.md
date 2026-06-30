@@ -115,6 +115,66 @@
 > **登录说明**：项目默认使用 Node.js 库进行登录，**无需 Python**。Python gppt 仅作为后备方案（可选）。  
 > **详细指南**：查看 [快速开始指南](docs/QUICKSTART.md)
 
+### Artflow 私有部署说明
+
+本仓库是基于 PixivFlow 的私有二次开发后端，当前作为 **Artflow-core** 使用。后端仍可独立运行，前端项目位于独立仓库 **Artflow-studio**。
+
+在新电脑上部署时，按普通 Git 项目安装即可：
+
+```bash
+git clone https://github.com/tianyin231/Artflow-core.git
+cd Artflow-core
+npm install
+npm run build
+```
+
+首次部署需要创建本地配置文件：
+
+```bash
+cp config/standalone.config.example.json config/standalone.config.json
+```
+
+然后编辑 `config/standalone.config.json`，填写 Pixiv 登录信息、下载目录、数据库路径等本机配置。
+
+不要提交这些本地运行文件：
+
+- `config/standalone.config.json`
+- `config/.current-config`
+- `config/backups/`
+- `data/`
+- `downloads/`
+- `workflow_runs/`
+- `logs/`
+- `*.db`, `*.db-shm`, `*.db-wal`
+- `.env*`
+- `node_modules/`
+- `dist/`
+
+这些内容由 `.gitignore` 排除，属于本机配置、运行数据或构建产物。
+
+常用运行命令：
+
+```bash
+npm run download       # 执行一次下载
+npm run scheduler      # 启动定时任务
+npm run webui          # 启动后端 API 服务，默认端口 3000
+```
+
+如果在新电脑上遇到 `better-sqlite3` 的 Node ABI 或原生模块错误，先尝试：
+
+```bash
+npm rebuild better-sqlite3
+```
+
+仍有问题时，删除依赖后重新安装：
+
+```bash
+rm -rf node_modules
+npm install
+```
+
+视频生成依赖 `scripts/workflow-render-video.py`，需要目标机器具备可用的 Python 环境以及脚本所需的图像/视频处理依赖。
+
 <a id="快速安装推荐"></a>
 ### 快速安装（推荐）
 
