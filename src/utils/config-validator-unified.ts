@@ -131,6 +131,24 @@ export class ConfigValidator {
           });
         }
 
+        if (target.tagWhitelist !== undefined && !Array.isArray(target.tagWhitelist)) {
+          errors.push({
+            code: 'CONFIG_VALIDATION_TARGET_TAG_WHITELIST_INVALID',
+            field: `${targetPrefix}.tagWhitelist`,
+            params: { index: index + 1 },
+            message: `Target ${index + 1}: Tag whitelist must be an array`,
+          });
+        }
+
+        if (target.tagBlacklist !== undefined && !Array.isArray(target.tagBlacklist)) {
+          errors.push({
+            code: 'CONFIG_VALIDATION_TARGET_TAG_BLACKLIST_INVALID',
+            field: `${targetPrefix}.tagBlacklist`,
+            params: { index: index + 1 },
+            message: `Target ${index + 1}: Tag blacklist must be an array`,
+          });
+        }
+
         // Validate date ranges
         this.validateTargetDates(target, index, errors, warnings);
       });
@@ -331,5 +349,4 @@ export function validateConfigWithUnifiedStorage(
     databasePath,
   });
 }
-
 

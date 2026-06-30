@@ -28,6 +28,11 @@ export class DatabaseMigration {
             file_path TEXT NOT NULL,
             author TEXT,
             user_id TEXT,
+            author_account TEXT,
+            author_profile_image_urls TEXT,
+            tags_json TEXT,
+            caption TEXT,
+            file_hash TEXT,
             downloaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(pixiv_id, type, file_path)
           )`,
@@ -72,6 +77,28 @@ export class DatabaseMigration {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
           )`,
+        `CREATE TABLE IF NOT EXISTS workflow_tasks (
+            task_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            command TEXT NOT NULL,
+            task_json TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
+        `CREATE TABLE IF NOT EXISTS command_presets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            category TEXT NOT NULL,
+            payload_json TEXT,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
+        `CREATE TABLE IF NOT EXISTS ai_settings (
+            id TEXT PRIMARY KEY,
+            settings_json TEXT NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
       ];
 
       // Create indexes for better query performance
@@ -86,6 +113,10 @@ export class DatabaseMigration {
         `CREATE INDEX IF NOT EXISTS idx_task_history_task_id ON task_history(task_id)`,
         `CREATE INDEX IF NOT EXISTS idx_task_history_status ON task_history(status)`,
         `CREATE INDEX IF NOT EXISTS idx_task_history_start_time ON task_history(start_time)`,
+        `CREATE INDEX IF NOT EXISTS idx_workflow_tasks_status ON workflow_tasks(status)`,
+        `CREATE INDEX IF NOT EXISTS idx_workflow_tasks_created_at ON workflow_tasks(created_at)`,
+        `CREATE INDEX IF NOT EXISTS idx_command_presets_category ON command_presets(category)`,
+        `CREATE INDEX IF NOT EXISTS idx_command_presets_updated_at ON command_presets(updated_at)`,
       ];
 
       const transaction = this.db.transaction((stmts: string[]) => {
@@ -95,6 +126,14 @@ export class DatabaseMigration {
       });
 
       transaction([...migrations, ...indexes]);
+
+      this.addMissingColumn('downloads', 'author_account', 'TEXT');
+      this.addMissingColumn('downloads', 'author_profile_image_urls', 'TEXT');
+      this.addMissingColumn('downloads', 'tags_json', 'TEXT');
+      this.addMissingColumn('downloads', 'caption', 'TEXT');
+      this.addMissingColumn('downloads', 'file_hash', 'TEXT');
+      this.addMissingColumn('command_presets', 'payload_json', 'TEXT');
+      this.db.prepare(`CREATE INDEX IF NOT EXISTS idx_downloads_file_hash ON downloads(file_hash)`).run();
 
       // Add is_active column to config_history if it doesn't exist
       try {
@@ -130,11 +169,18 @@ export class DatabaseMigration {
       );
     }
   }
+
+  private addMissingColumn(table: string, column: string, definition: string): void {
+    try {
+      const tableInfo = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      if (!tableInfo.some(col => col.name === column)) {
+        this.db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+      }
+    } catch (error) {
+      logger.warn(`Failed to add ${table}.${column} column (may already exist)`, { error });
+    }
+  }
 }
-
-
-
-
 
 
 

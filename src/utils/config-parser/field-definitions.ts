@@ -363,6 +363,18 @@ function initializeTargetFields(definitions: Map<string, FieldDefinition>): void
     type: 'string',
   });
 
+  definitions.set('targets[].tagWhitelist', {
+    required: false,
+    description: 'Only keep works containing at least one of these tags',
+    type: 'array',
+  });
+
+  definitions.set('targets[].tagBlacklist', {
+    required: false,
+    description: 'Exclude works containing any of these tags',
+    type: 'array',
+  });
+
   definitions.set('targets[].minBookmarks', {
     required: false,
     description: 'Minimum number of bookmarks required',
@@ -444,7 +456,6 @@ export function getFieldDefinition(
 
   return undefined;
 }
-
 
 
 

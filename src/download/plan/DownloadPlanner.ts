@@ -127,6 +127,9 @@ export class DownloadPlanner {
       }
     }
 
+    const tagFiltered = this.filterItemsByTagRules(filtered, target, itemType);
+    filtered = tagFiltered.items;
+
     if (filtered.length < originalCount) {
       logger.info(
         `Total filtering: ${originalCount} -> ${filtered.length} ${itemType}(s) after applying all filters`
@@ -138,6 +141,59 @@ export class DownloadPlanner {
       filteredOut: originalCount - filtered.length,
       originalCount,
     };
+  }
+
+  private filterItemsByTagRules<T extends DownloadItem>(
+    items: T[],
+    target: TargetConfig,
+    itemType: 'illustration' | 'novel'
+  ): { items: T[]; removed: number } {
+    const whitelist = this.normalizeTagRule(target.tagWhitelist);
+    const blacklist = this.normalizeTagRule(target.tagBlacklist);
+
+    if (whitelist.length === 0 && blacklist.length === 0) {
+      return { items, removed: 0 };
+    }
+
+    const beforeCount = items.length;
+    const filtered = items.filter((item) => {
+      const itemTags = this.extractNormalizedTags(item);
+      if (blacklist.length > 0 && blacklist.some((tag) => itemTags.has(tag))) {
+        return false;
+      }
+      if (whitelist.length > 0 && !whitelist.some((tag) => itemTags.has(tag))) {
+        return false;
+      }
+      return true;
+    });
+
+    const removed = beforeCount - filtered.length;
+    if (removed > 0) {
+      logger.info(
+        `Filtered by tag whitelist/blacklist: ${beforeCount} -> ${filtered.length} ${itemType}(s)`
+      );
+    }
+
+    return { items: filtered, removed };
+  }
+
+  private normalizeTagRule(tags?: string[]): string[] {
+    return (tags ?? [])
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  private extractNormalizedTags(item: DownloadItem): Set<string> {
+    const tags = new Set<string>();
+    for (const tag of ((item as any).tags ?? []) as Array<{ name?: string; translated_name?: string }>) {
+      if (tag.name) {
+        tags.add(tag.name.toLowerCase());
+      }
+      if (tag.translated_name) {
+        tags.add(tag.translated_name.toLowerCase());
+      }
+    }
+    return tags;
   }
 
   private deduplicate<T extends DownloadItem>(items: T[]): { items: T[]; removed: number } {
@@ -172,4 +228,3 @@ export class DownloadPlanner {
     return arr;
   }
 }
-

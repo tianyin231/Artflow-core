@@ -54,6 +54,8 @@ _metadata
 # Standalone mode - User config files (NEVER commit these!)
 config/standalone.config.json
 config/standalone.config.simple.json
+config/.current-config
+config/backups/
 # Block all backup files (various formats)
 config/standalone.config.json.backup.*
 config/standalone.config.*.backup.*
@@ -73,6 +75,7 @@ config/local/*
 data/
 downloads/
 logs/
+workflow_runs/
 *.db
 *.db-shm
 *.db-wal

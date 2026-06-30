@@ -1,12 +1,34 @@
 import { Request, Response } from 'express';
-import { statSync, existsSync, unlinkSync, readFileSync } from 'fs';
-import { join, extname, basename, resolve } from 'path';
+import { statSync, existsSync, unlinkSync, readFileSync, rmSync } from 'fs';
+import { join, extname, basename, resolve, relative } from 'path';
 import { loadConfig, getConfigPath } from '../../../config';
 import { logger } from '../../../logger';
 import { Database } from '../../../storage/Database';
 import { FileService } from '../../../download/FileService';
 import { FileNormalizationService } from '../../../download/FileNormalizationService';
 import { ErrorCode } from '../../utils/error-codes';
+
+const WORKFLOW_ROOT = resolve(process.cwd(), 'workflow_runs');
+
+function resolveClassicBaseDir(config: ReturnType<typeof loadConfig>, type: string): string | undefined {
+  if (type === 'novel') {
+    return config.storage?.novelDirectory || (config.storage?.downloadDirectory ? join(config.storage.downloadDirectory, 'novels') : undefined);
+  }
+  return config.storage?.illustrationDirectory || (config.storage?.downloadDirectory ? join(config.storage.downloadDirectory, 'illustrations') : undefined);
+}
+
+function isWithin(baseDir: string, candidate: string): boolean {
+  const resolvedBase = resolve(baseDir);
+  const resolvedCandidate = resolve(candidate);
+  return resolvedCandidate === resolvedBase || resolvedCandidate.startsWith(`${resolvedBase}/`);
+}
+
+function pathVariants(baseDir: string, fullPath: string): string[] {
+  return Array.from(new Set([
+    resolve(fullPath),
+    relative(resolve(baseDir), resolve(fullPath)),
+  ].filter(Boolean)));
+}
 
 /**
  * GET /api/files/preview
@@ -15,7 +37,7 @@ import { ErrorCode } from '../../utils/error-codes';
  */
 export async function previewFile(req: Request, res: Response): Promise<void> {
   try {
-    const { path: filePath, type = 'illustration' } = req.query;
+    const { path: filePath, type = 'illustration', source = 'classic' } = req.query;
     
     if (!filePath) {
       res.status(400).json({ errorCode: ErrorCode.FILE_PATH_REQUIRED });
@@ -25,10 +47,14 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
     const configPath = getConfigPath();
     const config = loadConfig(configPath);
 
-    const baseDir =
-      type === 'novel'
-        ? config.storage!.novelDirectory!
-        : config.storage!.illustrationDirectory!;
+    const baseDir = source === 'workflow' || type === 'workflow'
+      ? WORKFLOW_ROOT
+      : resolveClassicBaseDir(config, String(type));
+
+    if (!baseDir) {
+      res.status(500).json({ errorCode: ErrorCode.FILE_READ_FAILED });
+      return;
+    }
 
     // Handle both absolute paths (from database) and relative paths
     let fullPath: string;
@@ -53,7 +79,7 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
       resolvedFullPath
     });
     
-    if (!resolvedFullPath.startsWith(resolvedBaseDir)) {
+    if (!isWithin(resolvedBaseDir, resolvedFullPath)) {
       logger.error('Invalid path - security check failed', { 
         baseDir: resolvedBaseDir, 
         fullPath: resolvedFullPath 
@@ -77,9 +103,16 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
     // Set appropriate headers
     const ext = extname(resolvedFullPath).toLowerCase();
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-    const textExtensions = ['.txt', '.md', '.text'];
+    const textExtensions = ['.txt', '.md', '.text', '.json'];
+    const videoMimeTypes: { [key: string]: string } = {
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.webm': 'video/webm',
+      '.mkv': 'video/x-matroska',
+    };
     const isImage = imageExtensions.includes(ext);
     const isText = textExtensions.includes(ext);
+    const isVideo = ext in videoMimeTypes;
 
     if (isImage) {
       // Map extensions to correct MIME types
@@ -96,8 +129,11 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
       const fileName = basename(resolvedFullPath);
       // Encode filename for Content-Disposition header to avoid invalid characters
       const encodedFileName = encodeURIComponent(fileName);
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Type', ext === '.json' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8');
       res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodedFileName}`);
+    } else if (isVideo) {
+      res.setHeader('Content-Type', videoMimeTypes[ext]);
+      res.setHeader('Accept-Ranges', 'bytes');
     } else {
       const fileName = basename(resolvedFullPath);
       const encodedFileName = encodeURIComponent(fileName);
@@ -111,11 +147,11 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
         // For text files, read and send directly
         const fileContent = readFileSync(resolvedFullPath, 'utf-8');
         res.send(fileContent);
-      } else if (isImage) {
-        // For images, use sendFile
+      } else if (isImage || isVideo) {
+        // For browser-rendered media, let Express stream the file.
         res.sendFile(resolvedFullPath, (err) => {
           if (err) {
-            logger.error('Failed to send image file', { error: err, path: resolvedFullPath });
+            logger.error('Failed to send media file', { error: err, path: resolvedFullPath });
             if (!res.headersSent) {
               res.status(500).json({ errorCode: ErrorCode.FILE_READ_FAILED });
             }
@@ -161,21 +197,27 @@ export async function previewFile(req: Request, res: Response): Promise<void> {
  * Delete a file
  */
 export async function deleteFile(req: Request, res: Response): Promise<void> {
+  let database: Database | null = null;
   try {
     const { id } = req.params;
-    const { path: filePath, type = 'illustration' } = req.query;
+    const { path: filePath, type = 'illustration', source = 'classic' } = req.query;
     const configPath = getConfigPath();
     const config = loadConfig(configPath);
 
-    const baseDir =
-      type === 'novel'
-        ? config.storage!.novelDirectory!
-        : config.storage!.illustrationDirectory!;
+    const baseDir = source === 'workflow' || type === 'workflow'
+      ? WORKFLOW_ROOT
+      : resolveClassicBaseDir(config, String(type));
 
-    const fullPath = filePath ? join(baseDir, String(filePath)) : join(baseDir, id);
+    if (!baseDir) {
+      res.status(500).json({ errorCode: ErrorCode.FILE_READ_FAILED });
+      return;
+    }
+
+    const resolvedBaseDir = resolve(baseDir);
+    const fullPath = filePath ? resolve(resolvedBaseDir, String(filePath)) : resolve(resolvedBaseDir, id);
 
     // Security: Ensure path is within base directory
-    if (!fullPath.startsWith(baseDir)) {
+    if (!isWithin(resolvedBaseDir, fullPath)) {
       res.status(400).json({ errorCode: ErrorCode.FILE_PATH_INVALID });
       return;
     }
@@ -185,13 +227,69 @@ export async function deleteFile(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    unlinkSync(fullPath);
+    const stats = statSync(fullPath);
+    if (!stats.isDirectory() && extname(fullPath).toLowerCase() === '.db') {
+      res.status(400).json({
+        errorCode: ErrorCode.FILE_DELETE_FAILED,
+        error: 'Database files cannot be deleted from file browser',
+      });
+      return;
+    }
+
+    let deletedDownloadRecords = 0;
+    let deletedWorkflowTask = false;
+    const variants = pathVariants(resolvedBaseDir, fullPath);
+    let workflowTaskId: string | null = null;
+    if (stats.isDirectory() && (source === 'workflow' || type === 'workflow')) {
+      const relativePath = relative(resolvedBaseDir, fullPath);
+      const taskId = relativePath.split(/[\\/]/)[0];
+      workflowTaskId = taskId && taskId !== '..' && taskId !== '.' ? taskId : null;
+    }
+
+    if (config.storage?.databasePath) {
+      database = new Database(config.storage.databasePath);
+      database.migrate();
+    }
+
+    if (stats.isDirectory()) {
+      rmSync(fullPath, { recursive: true, force: false });
+    } else {
+      unlinkSync(fullPath);
+    }
+
+    if (database) {
+      if (stats.isDirectory()) {
+        deletedDownloadRecords = database.deleteDownloadsByFilePathPrefix(variants);
+        if (workflowTaskId) {
+          deletedWorkflowTask = database.deleteWorkflowTask(workflowTaskId);
+        }
+      } else {
+        deletedDownloadRecords = database.deleteDownloadsByFilePath(variants);
+      }
+    }
+
+    if (database) {
+      database.close();
+      database = null;
+    }
 
     res.json({
       success: true,
       errorCode: ErrorCode.FILE_DELETE_SUCCESS,
+      data: {
+        deletedType: stats.isDirectory() ? 'directory' : 'file',
+        deletedDownloadRecords,
+        deletedWorkflowTask,
+      },
     });
   } catch (error) {
+    if (database) {
+      try {
+        database.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
     logger.error('Failed to delete file', { error });
     res.status(500).json({ errorCode: ErrorCode.FILE_DELETE_FAILED });
   }
@@ -258,12 +356,6 @@ export async function normalizeFiles(req: Request, res: Response): Promise<void>
     res.status(500).json({ errorCode: ErrorCode.FILE_NORMALIZE_FAILED, message: errorMessage });
   }
 }
-
-
-
-
-
-
 
 
 

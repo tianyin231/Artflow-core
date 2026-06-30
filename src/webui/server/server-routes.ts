@@ -7,6 +7,7 @@ import downloadRoutes from '../routes/download';
 import statsRoutes from '../routes/stats';
 import logsRoutes from '../routes/logs';
 import filesRoutes from '../routes/files';
+import workflowRoutes from '../routes/workflow';
 
 /**
  * Setup API routes for Express app
@@ -24,8 +25,8 @@ export function setupRoutes(app: Express): void {
   app.use('/api/stats', statsRoutes);
   app.use('/api/logs', logsRoutes);
   app.use('/api/files', filesRoutes);
+  app.use('/api/workflow', workflowRoutes);
 }
-
 
 
 

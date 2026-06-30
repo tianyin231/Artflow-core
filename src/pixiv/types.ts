@@ -5,13 +5,22 @@
 export interface PixivUser {
   id: string;
   name: string;
+  account?: string;
+  profile_image_urls?: Record<string, string>;
+}
+
+export interface PixivTag {
+  name: string;
+  translated_name?: string;
 }
 
 export interface PixivIllust {
   id: number;
   title: string;
+  caption?: string;
   page_count: number;
   user: PixivUser;
+  tags?: PixivTag[];
   image_urls: {
     square_medium: string;
     medium: string;
@@ -56,7 +65,6 @@ export interface PixivNovel {
 export interface PixivNovelTextResponse {
   novel_text: string;
 }
-
 
 
 

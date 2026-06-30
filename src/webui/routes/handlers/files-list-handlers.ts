@@ -6,6 +6,104 @@ import { logger } from '../../../logger';
 import { Database } from '../../../storage/Database';
 import { ErrorCode } from '../../utils/error-codes';
 
+const WORKFLOW_ROOT = resolve(process.cwd(), 'workflow_runs');
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm', '.mkv']);
+
+function resolveClassicBaseDir(config: ReturnType<typeof loadConfig>, type: string): string | undefined {
+  if (type === 'novel') {
+    return config.storage?.novelDirectory || (config.storage?.downloadDirectory ? join(config.storage.downloadDirectory, 'novels') : undefined);
+  }
+  return config.storage?.illustrationDirectory || (config.storage?.downloadDirectory ? join(config.storage.downloadDirectory, 'illustrations') : undefined);
+}
+
+function workflowCategoryMatches(name: string, category: string): boolean {
+  const ext = extname(name).toLowerCase();
+  if (category === 'assets') return IMAGE_EXTENSIONS.has(ext) && !/-cover(?:-\d+)?\.jpe?g$/i.test(name);
+  if (category === 'covers') return /-cover(?:-\d+)?\.jpe?g$/i.test(name);
+  if (category === 'videos') return VIDEO_EXTENSIONS.has(ext);
+  if (category === 'configs') return name.endsWith('.json') || name.endsWith('.db');
+  return true;
+}
+
+function isWithin(baseDir: string, candidate: string): boolean {
+  const resolvedBase = resolve(baseDir);
+  const resolvedCandidate = resolve(candidate);
+  return resolvedCandidate === resolvedBase || resolvedCandidate.startsWith(`${resolvedBase}/`);
+}
+
+function classifyWorkflowFile(name: string): string {
+  const ext = extname(name).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(ext)) return /-cover(?:-\d+)?\.jpe?g$/i.test(name) ? 'cover' : 'asset';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  return 'config';
+}
+
+function collectWorkflowFiles(baseDir: string, category: string): any[] {
+  const files: any[] = [];
+  const stack = [baseDir];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop()!;
+    if (!existsSync(currentDir)) continue;
+
+    for (const item of readdirSync(currentDir)) {
+      const itemPath = join(currentDir, item);
+      const stats = statSync(itemPath);
+      if (stats.isDirectory()) {
+        stack.push(itemPath);
+        continue;
+      }
+      if (!workflowCategoryMatches(item, category)) {
+        continue;
+      }
+
+      const relativePath = relative(baseDir, itemPath);
+      files.push({
+        name: item,
+        path: relativePath,
+        type: 'file',
+        size: stats.size,
+        modified: stats.mtime.toISOString(),
+        downloadedAt: stats.mtime.toISOString(),
+        extension: extname(item),
+        category: classifyWorkflowFile(item),
+        source: 'workflow',
+        displayPath: resolve(itemPath),
+      });
+    }
+  }
+
+  return files;
+}
+
+function getDirectoryStats(dirPath: string): { fileCount: number; imageCount: number; totalSize: number } {
+  let fileCount = 0;
+  let imageCount = 0;
+  let totalSize = 0;
+  const stack = [dirPath];
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop()!;
+    for (const item of readdirSync(currentDir)) {
+      const itemPath = join(currentDir, item);
+      const stats = statSync(itemPath);
+      if (stats.isDirectory()) {
+        stack.push(itemPath);
+        continue;
+      }
+
+      fileCount += 1;
+      totalSize += stats.size;
+      if (IMAGE_EXTENSIONS.has(extname(item).toLowerCase())) {
+        imageCount += 1;
+      }
+    }
+  }
+
+  return { fileCount, imageCount, totalSize };
+}
+
 /**
  * GET /api/files/recent
  * Get recently downloaded files from database
@@ -117,9 +215,7 @@ export async function getRecentFiles(req: Request, res: Response): Promise<void>
           fileInfo.extension = extname(filePath);
           
           // Calculate relative path from base directory
-          const baseDir = download.type === 'novel'
-            ? config.storage!.novelDirectory!
-            : config.storage!.illustrationDirectory!;
+          const baseDir = resolveClassicBaseDir(config, download.type) || config.storage!.downloadDirectory!;
           
           try {
             fileInfo.relativePath = relative(baseDir, filePath);
@@ -160,7 +256,7 @@ export async function getRecentFiles(req: Request, res: Response): Promise<void>
 export async function listFiles(req: Request, res: Response): Promise<void> {
   let database: Database | null = null;
   try {
-    const { path: dirPath = '', type = 'illustration', sort = 'name', order = 'asc' } = req.query;
+    const { path: dirPath = '', type = 'illustration', source = 'classic', category = 'all', sort = 'name', order = 'asc' } = req.query;
     const configPath = getConfigPath();
     const config = loadConfig(configPath);
 
@@ -174,24 +270,27 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    let baseDir =
-      type === 'novel'
-        ? config.storage.novelDirectory
-        : config.storage.illustrationDirectory;
+    const isWorkflowSource = source === 'workflow' || type === 'workflow';
+    let baseDir = isWorkflowSource
+      ? WORKFLOW_ROOT
+      : resolveClassicBaseDir(config, String(type));
 
     if (!baseDir) {
-      logger.error('Base directory is not configured', { type, storage: config.storage });
+      logger.error('Base directory is not configured', { type, source, storage: config.storage });
       res.status(500).json({ 
         errorCode: ErrorCode.FILE_READ_FAILED,
-        error: `Base directory for ${type} is not configured` 
+        error: `Base directory for ${String(type)} is not configured` 
       });
       return;
     }
 
-    const fullPath = dirPath ? join(baseDir, String(dirPath)) : baseDir;
+    baseDir = resolve(baseDir);
+    const fullPath = dirPath ? resolve(baseDir, String(dirPath)) : baseDir;
 
     logger.info('Listing files', { 
-      type, 
+      type,
+      source,
+      category,
       baseDir, 
       dirPath, 
       fullPath, 
@@ -200,7 +299,7 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
     });
 
     // Security: Ensure path is within base directory
-    if (!fullPath.startsWith(baseDir)) {
+    if (!isWithin(baseDir, fullPath)) {
       logger.warn('Path traversal attempt detected', { baseDir, fullPath });
       res.status(400).json({ errorCode: ErrorCode.FILE_PATH_INVALID });
       return;
@@ -209,6 +308,32 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
     if (!existsSync(fullPath)) {
       logger.warn('Directory does not exist', { fullPath, baseDir, type });
       res.json({ files: [], directories: [] });
+      return;
+    }
+
+    if (isWorkflowSource && String(category) !== 'all') {
+      const files = collectWorkflowFiles(baseDir, String(category));
+      const sortOrder = String(order).toLowerCase() === 'desc' ? -1 : 1;
+      const sortBy = String(sort);
+      files.sort((a, b) => {
+        if (sortBy === 'time' || sortBy === 'downloadedAt') {
+          return (new Date(a.modified).getTime() - new Date(b.modified).getTime()) * sortOrder;
+        }
+        if (sortBy === 'size') {
+          return ((a.size ?? 0) - (b.size ?? 0)) * sortOrder;
+        }
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * sortOrder;
+      });
+      res.json({
+        data: {
+          files,
+          directories: [],
+          currentPath: '/',
+          source: 'workflow',
+          category: String(category),
+          basePath: baseDir,
+        },
+      });
       return;
     }
 
@@ -221,13 +346,24 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
       const stats = statSync(itemPath);
 
       if (stats.isDirectory()) {
+        const directoryStats = isWorkflowSource && String(category) === 'all'
+          ? getDirectoryStats(itemPath)
+          : undefined;
         directories.push({
           name: item,
           path: dirPath ? `${dirPath}/${item}` : item,
           type: 'directory',
           modified: stats.mtime.toISOString(),
+          category: isWorkflowSource ? 'task' : String(type),
+          source: isWorkflowSource ? 'workflow' : 'classic',
+          recursiveFileCount: directoryStats?.fileCount,
+          recursiveImageCount: directoryStats?.imageCount,
+          recursiveSize: directoryStats?.totalSize,
         });
       } else {
+        if (isWorkflowSource && !workflowCategoryMatches(item, String(category))) {
+          continue;
+        }
         const relativePath = dirPath ? `${dirPath}/${item}` : item;
         const absolutePath = resolve(itemPath);
         files.push({
@@ -237,6 +373,15 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
           size: stats.size,
           modified: stats.mtime.toISOString(),
           extension: extname(item),
+          category: isWorkflowSource
+            ? IMAGE_EXTENSIONS.has(extname(item).toLowerCase())
+              ? (/-cover-\d+\.jpe?g$/i.test(item) ? 'cover' : 'asset')
+              : VIDEO_EXTENSIONS.has(extname(item).toLowerCase())
+                ? 'video'
+                : 'config'
+            : String(type),
+          source: isWorkflowSource ? 'workflow' : 'classic',
+          displayPath: absolutePath,
           absolutePath, // Store for database lookup
         });
       }
@@ -244,7 +389,7 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
 
     // Query database for download times
     let downloadTimesMap = new Map<string, string>();
-    if (files.length > 0) {
+    if (!isWorkflowSource && files.length > 0 && config.storage!.databasePath) {
       try {
         database = new Database(config.storage!.databasePath!);
         database.migrate();
@@ -377,6 +522,9 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
         files,
         directories,
         currentPath: dirPath || '/',
+        source: isWorkflowSource ? 'workflow' : 'classic',
+        category: String(category),
+        basePath: baseDir,
       },
     });
   } catch (error) {
@@ -392,4 +540,3 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
     res.status(500).json({ errorCode: ErrorCode.FILE_LIST_FAILED });
   }
 }
-

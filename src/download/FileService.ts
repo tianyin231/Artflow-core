@@ -14,9 +14,12 @@ export interface FileMetadata {
 export interface PixivMetadata {
   pixiv_id: string | number;
   title: string;
+  caption?: string;
   author: {
     id: string;
     name: string;
+    account?: string;
+    profile_image_urls?: Record<string, string>;
   };
   tags: Array<{ name: string; translated_name?: string }>;
   original_url: string;
@@ -357,4 +360,3 @@ export class FileService implements IFileService {
     await this.saveMetadata(filePath, metadata);
   }
 }
-

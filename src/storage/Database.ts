@@ -10,6 +10,8 @@ import { ExecutionRepository } from './repositories/ExecutionRepository';
 import { SchedulerRepository } from './repositories/SchedulerRepository';
 import { ConfigHistoryRepository } from './repositories/ConfigHistoryRepository';
 import { TaskHistoryRepository } from './repositories/TaskHistoryRepository';
+import { AiSettingsRecord, CommandPresetRecord, WorkflowRepository } from './repositories/WorkflowRepository';
+import { WorkflowTask } from '../workflow/types';
 
 export interface AccessTokenStore {
   accessToken: string;
@@ -26,6 +28,11 @@ export interface DownloadRecordInput {
   filePath: string;
   userId?: string;
   author?: string;
+  authorAccount?: string;
+  authorProfileImageUrls?: Record<string, string>;
+  tags?: Array<{ name: string; translated_name?: string }>;
+  caption?: string;
+  fileHash?: string;
 }
 
 export type ExecutionStatus = 'success' | 'partial' | 'failed';
@@ -50,6 +57,7 @@ export class Database implements IDatabase {
   private schedulerRepo: SchedulerRepository;
   private configHistoryRepo: ConfigHistoryRepository;
   private taskHistoryRepo: TaskHistoryRepository;
+  private workflowRepo: WorkflowRepository;
 
   constructor(private readonly databasePath: string) {
     try {
@@ -69,6 +77,7 @@ export class Database implements IDatabase {
       this.schedulerRepo = new SchedulerRepository(this.db);
       this.configHistoryRepo = new ConfigHistoryRepository(this.db);
       this.taskHistoryRepo = new TaskHistoryRepository(this.db);
+      this.workflowRepo = new WorkflowRepository(this.db);
     } catch (error) {
       throw new DatabaseError(
         `Failed to initialize database at ${this.databasePath}`,
@@ -103,6 +112,10 @@ export class Database implements IDatabase {
     return this.downloadRepo.hasDownloaded(pixivId, type);
   }
 
+  public hasFileHash(fileHash: string): boolean {
+    return this.downloadRepo.hasFileHash(fileHash);
+  }
+
   public isDownloaded(pixivId: string, type: 'illustration' | 'novel', filePath: string): boolean {
     return this.downloadRepo.isDownloaded(pixivId, type, filePath);
   }
@@ -126,6 +139,14 @@ export class Database implements IDatabase {
     newPath: string
   ): number {
     return this.downloadRepo.updateFilePath(pixivId, type, oldPath, newPath);
+  }
+
+  public deleteDownloadsByFilePath(filePaths: string[]): number {
+    return this.downloadRepo.deleteByFilePath(filePaths);
+  }
+
+  public deleteDownloadsByFilePathPrefix(prefixes: string[]): number {
+    return this.downloadRepo.deleteByFilePathPrefix(prefixes);
   }
 
   public getDownloadStats(tag?: string, type?: 'illustration' | 'novel'): {
@@ -502,8 +523,47 @@ export class Database implements IDatabase {
     return this.taskHistoryRepo.deleteAllTaskHistory();
   }
 
+  public upsertWorkflowTask(task: WorkflowTask): void {
+    this.workflowRepo.upsertTask(task);
+  }
+
+  public listWorkflowTasks(limit = 200): WorkflowTask[] {
+    return this.workflowRepo.listTasks(limit);
+  }
+
+  public getWorkflowTask(taskId: string): WorkflowTask | null {
+    return this.workflowRepo.getTask(taskId);
+  }
+
+  public deleteWorkflowTask(taskId: string): boolean {
+    return this.workflowRepo.deleteTask(taskId);
+  }
+
+  public listCommandPresets(): CommandPresetRecord[] {
+    return this.workflowRepo.listPresets();
+  }
+
+  public upsertCommandPreset(preset: CommandPresetRecord): CommandPresetRecord {
+    return this.workflowRepo.upsertPreset(preset);
+  }
+
+  public deleteCommandPreset(id: string): boolean {
+    return this.workflowRepo.deletePreset(id);
+  }
+
+  public replaceCommandPresets(presets: CommandPresetRecord[]): void {
+    this.workflowRepo.replacePresets(presets);
+  }
+
+  public getAiSettings(): AiSettingsRecord | null {
+    return this.workflowRepo.getAiSettings();
+  }
+
+  public saveAiSettings(settings: AiSettingsRecord): AiSettingsRecord {
+    return this.workflowRepo.saveAiSettings(settings);
+  }
+
   public close() {
     this.db.close();
   }
 }
-

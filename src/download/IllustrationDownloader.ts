@@ -7,6 +7,7 @@ import { logger } from '../logger';
 import { processInParallel } from '../utils/concurrency';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { getErrorMessage } from '../utils/errors';
 
 /**
@@ -40,7 +41,17 @@ export class IllustrationDownloader {
       ]);
       
       // Insert database records for existing files
+      let recordedExistingFiles = 0;
       for (const filePath of existingFiles) {
+        const fileHash = await this.calculateFileHash(filePath);
+        if (fileHash && this.database.hasFileHash(fileHash)) {
+          logger.info(`Skipped duplicate existing file for illustration ${detail.id}`, {
+            filePath,
+            fileHash,
+          });
+          continue;
+        }
+
         this.database.insertDownload({
           pixivId: String(detail.id),
           type: 'illustration',
@@ -49,10 +60,16 @@ export class IllustrationDownloader {
           filePath,
           author: detail.user?.name,
           userId: detail.user?.id,
+          authorAccount: detail.user?.account,
+          authorProfileImageUrls: detail.user?.profile_image_urls,
+          tags,
+          caption: detail.caption,
+          fileHash,
         });
+        recordedExistingFiles++;
       }
       
-      logger.info(`Updated database with ${existingFiles.length} existing file(s) for illustration ${detail.id}`);
+      logger.info(`Updated database with ${recordedExistingFiles} existing file(s) for illustration ${detail.id}`);
       return; // Skip download
     }
     
@@ -72,6 +89,7 @@ export class IllustrationDownloader {
       logger.debug(`Downloading ${pages.length} pages for illustration ${detail.id} in parallel (concurrency: ${concurrency})`);
     }
 
+    const seenHashes = new Set<string>();
     const downloadResults = await processInParallel(
       pages.map((page, index) => ({ page, index })),
       async ({ page, index }) => {
@@ -98,15 +116,28 @@ export class IllustrationDownloader {
             setTimeout(() => reject(new Error(`Timeout: Failed to download image for illustration ${detail.id} page ${index + 1} within 120 seconds`)), 120000)
           )
         ]);
+        const fileHash = this.calculateHash(buffer);
+        if (seenHashes.has(fileHash) || this.database.hasFileHash(fileHash)) {
+          logger.info(`Skipped duplicate image content for illustration ${detail.id} page ${index + 1}`, {
+            fileHash,
+            illustId: detail.id,
+          });
+          return { filePath: null, index: index + 1, duplicate: true };
+        }
+        seenHashes.add(fileHash);
+
         const filePath = await this.fileService.saveImage(buffer, fileName, metadata);
 
         // Save metadata JSON file
         const pixivMetadata: PixivMetadata = {
           pixiv_id: detail.id,
           title: detail.title,
+          caption: detail.caption,
           author: {
             id: detail.user?.id || '',
             name: detail.user?.name || 'Unknown',
+            account: detail.user?.account,
+            profile_image_urls: detail.user?.profile_image_urls,
           },
           tags: tags,
           original_url: `https://www.pixiv.net/artworks/${detail.id}`,
@@ -127,7 +158,7 @@ export class IllustrationDownloader {
           logger.warn(`Failed to save metadata for illustration ${detail.id} page ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
         }
 
-        return { filePath, index: index + 1 };
+        return { filePath, index: index + 1, duplicate: false, fileHash };
       },
       concurrency
     );
@@ -136,6 +167,10 @@ export class IllustrationDownloader {
     let successCount = 0;
     for (const result of downloadResults) {
       if (result.success) {
+        if (result.result.duplicate || !result.result.filePath) {
+          continue;
+        }
+
         this.database.insertDownload({
           pixivId: String(detail.id),
           type: 'illustration',
@@ -144,6 +179,11 @@ export class IllustrationDownloader {
           filePath: result.result.filePath,
           author: detail.user?.name,
           userId: detail.user?.id,
+          authorAccount: detail.user?.account,
+          authorProfileImageUrls: detail.user?.profile_image_urls,
+          tags,
+          caption: detail.caption,
+          fileHash: result.result.fileHash,
         });
         // Display download path to user
         const { displayDownloadPath } = await import('../utils/directory-info');
@@ -253,5 +293,18 @@ export class IllustrationDownloader {
     }
     return path.slice(index);
   }
-}
 
+  private calculateHash(buffer: ArrayBuffer): string {
+    return createHash('sha256').update(Buffer.from(buffer)).digest('hex');
+  }
+
+  private async calculateFileHash(filePath: string): Promise<string | undefined> {
+    try {
+      const content = await fs.readFile(filePath);
+      return createHash('sha256').update(content).digest('hex');
+    } catch (error) {
+      logger.warn(`Failed to calculate file hash for ${filePath}`, { error: getErrorMessage(error) });
+      return undefined;
+    }
+  }
+}

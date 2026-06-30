@@ -1,5 +1,5 @@
 import { TargetConfig } from '../config';
-import { PixivIllust, PixivNovel, PixivNovelTextResponse, PixivUser } from '../pixiv/PixivClient';
+import { PixivIllust, PixivNovel, PixivNovelTextResponse, PixivTag, PixivUser } from '../pixiv/PixivClient';
 
 /**
  * Interface for Pixiv API client
@@ -81,7 +81,7 @@ export interface IPixivClient {
    */
   getIllustDetailWithTags(illustId: number): Promise<{
     illust: PixivIllust;
-    tags: Array<{ name: string; translated_name?: string }>;
+    tags: PixivTag[];
   }>;
 
   /**
@@ -107,4 +107,3 @@ export interface IPixivClient {
    */
   downloadImage(originalUrl: string): Promise<ArrayBuffer>;
 }
-

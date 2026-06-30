@@ -15,6 +15,18 @@ export class DownloadQueryRepository extends BaseRepository {
     return !!row;
   }
 
+  public hasFileHash(fileHash: string): boolean {
+    if (!fileHash) {
+      return false;
+    }
+
+    const stmt = this.db.prepare(
+      `SELECT 1 FROM downloads WHERE file_hash = ? LIMIT 1`
+    );
+    const row = stmt.get(fileHash);
+    return !!row;
+  }
+
   /**
    * Check if an item has been downloaded (with file path)
    */
@@ -359,7 +371,6 @@ export class DownloadQueryRepository extends BaseRepository {
     }>;
   }
 }
-
 
 
 

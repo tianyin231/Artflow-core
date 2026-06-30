@@ -25,6 +25,10 @@ export class DownloadRepository extends BaseRepository {
     return this.queryRepo.hasDownloaded(pixivId, type);
   }
 
+  public hasFileHash(fileHash: string): boolean {
+    return this.queryRepo.hasFileHash(fileHash);
+  }
+
   public isDownloaded(pixivId: string, type: 'illustration' | 'novel', filePath: string): boolean {
     return this.queryRepo.isDownloaded(pixivId, type, filePath);
   }
@@ -91,6 +95,14 @@ export class DownloadRepository extends BaseRepository {
     return this.writeRepo.updateFilePath(pixivId, type, oldPath, newPath);
   }
 
+  public deleteByFilePath(filePaths: string[]): number {
+    return this.writeRepo.deleteByFilePath(filePaths);
+  }
+
+  public deleteByFilePathPrefix(prefixes: string[]): number {
+    return this.writeRepo.deleteByFilePathPrefix(prefixes);
+  }
+
   // Stats methods
   public getDownloadStats(tag?: string, type?: 'illustration' | 'novel') {
     return this.statsRepo.getDownloadStats(tag, type);
@@ -108,4 +120,3 @@ export class DownloadRepository extends BaseRepository {
     return this.statsRepo.getAuthorStats(limit);
   }
 }
-

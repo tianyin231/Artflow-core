@@ -17,7 +17,7 @@ import { MediaDownloadService } from './client/MediaDownloadService';
 import { SearchService } from './client/SearchService';
 
 // Re-export types for backward compatibility
-export type { PixivUser, PixivIllust, PixivNovel, PixivIllustPage, PixivNovelTextResponse } from './types';
+export type { PixivUser, PixivIllust, PixivNovel, PixivIllustPage, PixivNovelTextResponse, PixivTag } from './types';
 
 export class PixivClient implements IPixivClient {
   private readonly baseUrl = 'https://app-api.pixiv.net/';
@@ -314,4 +314,3 @@ export class PixivClient implements IPixivClient {
     return this.apiCore.request<T>(url, { ...init, headers });
   }
 }
-

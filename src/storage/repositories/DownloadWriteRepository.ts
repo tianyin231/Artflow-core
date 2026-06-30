@@ -10,8 +10,34 @@ export class DownloadWriteRepository extends BaseRepository {
    */
   public insertDownload(record: DownloadRecordInput): void {
     const stmt = this.db.prepare(
-      `INSERT OR IGNORE INTO downloads (pixiv_id, type, tag, title, file_path, author, user_id)
-       VALUES (@pixiv_id, @type, @tag, @title, @file_path, @author, @user_id)`
+      `INSERT OR IGNORE INTO downloads (
+         pixiv_id,
+         type,
+         tag,
+         title,
+         file_path,
+         author,
+         user_id,
+         author_account,
+         author_profile_image_urls,
+         tags_json,
+         caption,
+         file_hash
+       )
+       VALUES (
+         @pixiv_id,
+         @type,
+         @tag,
+         @title,
+         @file_path,
+         @author,
+         @user_id,
+         @author_account,
+         @author_profile_image_urls,
+         @tags_json,
+         @caption,
+         @file_hash
+       )`
     );
 
     stmt.run({
@@ -22,6 +48,11 @@ export class DownloadWriteRepository extends BaseRepository {
       file_path: record.filePath,
       author: record.author ?? null,
       user_id: record.userId ?? null,
+      author_account: record.authorAccount ?? null,
+      author_profile_image_urls: record.authorProfileImageUrls ? JSON.stringify(record.authorProfileImageUrls) : null,
+      tags_json: record.tags ? JSON.stringify(record.tags) : null,
+      caption: record.caption ?? null,
+      file_hash: record.fileHash ?? null,
     });
   }
 
@@ -50,9 +81,26 @@ export class DownloadWriteRepository extends BaseRepository {
     const result = stmt.run(newPath, pixivId, type, oldPath);
     return result.changes;
   }
+
+  public deleteByFilePath(filePaths: string[]): number {
+    const uniquePaths = Array.from(new Set(filePaths.filter(Boolean)));
+    if (uniquePaths.length === 0) return 0;
+
+    const placeholders = uniquePaths.map(() => '?').join(',');
+    const stmt = this.db.prepare(`DELETE FROM downloads WHERE file_path IN (${placeholders})`);
+    return stmt.run(...uniquePaths).changes;
+  }
+
+  public deleteByFilePathPrefix(prefixes: string[]): number {
+    const uniquePrefixes = Array.from(new Set(prefixes.filter(Boolean)));
+    if (uniquePrefixes.length === 0) return 0;
+
+    const conditions = uniquePrefixes.map(() => `(file_path = ? OR file_path LIKE ?)`).join(' OR ');
+    const params = uniquePrefixes.flatMap((prefix) => [prefix, `${prefix.replace(/\/+$/, '')}/%`]);
+    const stmt = this.db.prepare(`DELETE FROM downloads WHERE ${conditions}`);
+    return stmt.run(...params).changes;
+  }
 }
-
-
 
 
 

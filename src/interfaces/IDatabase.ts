@@ -36,6 +36,11 @@ export interface IDatabase {
   hasDownloaded(pixivId: string, type: 'illustration' | 'novel'): boolean;
 
   /**
+   * Check if a file hash has already been recorded.
+   */
+  hasFileHash(fileHash: string): boolean;
+
+  /**
    * Record a download
    */
   recordDownload(record: DownloadRecordInput): void;
@@ -158,4 +163,3 @@ export interface IDatabase {
     newPath: string
   ): number;
 }
-

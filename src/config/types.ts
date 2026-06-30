@@ -112,6 +112,16 @@ export interface TargetConfig {
    */
   languageFilter?: 'chinese' | 'non-chinese';
   /**
+   * Only keep works that contain at least one of these Pixiv tags.
+   * Matching checks both original tag names and translated tag names.
+   */
+  tagWhitelist?: string[];
+  /**
+   * Exclude works that contain any of these Pixiv tags.
+   * Matching checks both original tag names and translated tag names.
+   */
+  tagBlacklist?: string[];
+  /**
    * Enable language detection and logging for novels (only used when type='novel')
    * If true, detected language will be logged and saved in metadata
    * Default: true
@@ -317,7 +327,6 @@ export interface StandaloneConfig {
     timeout?: number;
   };
 }
-
 
 
 
