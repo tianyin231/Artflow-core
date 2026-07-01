@@ -13,6 +13,9 @@ import { Database } from '../storage/Database';
 import { StandaloneConfig, TargetConfig, loadConfig, getConfigPath } from '../config';
 import { logger } from '../logger';
 import {
+  BilibiliPublishPackage,
+  BilibiliPublishPreview,
+  BilibiliPublishSource,
   CreateWorkflowTaskRequest,
   WorkflowImageAsset,
   WorkflowPlan,
@@ -291,10 +294,15 @@ export class WorkflowManager {
     return task.coverPath;
   }
 
+  public previewBilibiliPublish(taskId: string): BilibiliPublishPreview {
+    return this.createBilibiliPublishPreview(this.requireTask(taskId));
+  }
+
   private async runTask(task: WorkflowTask, request: CreateWorkflowTaskRequest): Promise<void> {
     this.startStage(task, 'plan', '正在解析自然语言指令');
     const plan = this.createPlan(task.command, request.videoOverrides);
     this.applyPixivOverrides(plan, request.pixivOverrides);
+    this.applyPublishOverrides(plan, request.publishOverrides);
     const pixivConfig = this.createPixivConfig(task.id, plan);
     task.plan = plan;
     task.pixivConfig = this.maskPixivConfig(pixivConfig);
@@ -360,7 +368,7 @@ export class WorkflowManager {
 
   private async renderAndPauseForReview(task: WorkflowTask, acceptedImages: WorkflowImageAsset[]): Promise<void> {
     this.startStage(task, 'render', '正在调用 MoviePy 渲染视频');
-    task.videoPath = await this.renderVideo(task, acceptedImages.map((asset) => asset.path));
+    task.videoPath = await this.renderVideo(task, this.rankVideoAssets(task, acceptedImages));
     task.latestArtifact = { type: 'video', path: task.videoPath, name: basename(task.videoPath) };
     this.addProgressEvent(task, 'render', 'video', `视频生成完成: ${basename(task.videoPath)}`, {
       artifactPath: task.videoPath,
@@ -489,10 +497,10 @@ export class WorkflowManager {
       0,
       600
     );
-    const fps = this.clampNumber(overrides.fps ?? (style === 'soft' ? 24 : 30), 12, 60);
+    const fps = this.clampNumber(overrides.fps ?? 60, 12, 60);
     const crossfade = this.clampNumber(overrides.crossfade ?? (style === 'soft' ? 0.35 : 0.18), 0, 2);
     const secondsPerImage = this.clampNumber(
-      overrides.secondsPerImage ?? (totalDuration > 0 ? (totalDuration + (maxImages - 1) * crossfade) / maxImages : style === 'soft' ? 2.4 : 1.6),
+      overrides.secondsPerImage ?? (totalDuration > 0 ? (totalDuration + (maxImages - 1) * crossfade) / maxImages : style === 'soft' ? 4 : 3),
       0.5,
       20
     );
@@ -525,6 +533,7 @@ export class WorkflowManager {
         shuffleSeed: Date.now() % 100000,
         totalDuration: totalDuration || undefined,
         bgmPath: bgmPath || undefined,
+        disclaimer: overrides.disclaimer ?? this.createDefaultDisclaimer(),
       },
       publish: {
         platform: 'bilibili',
@@ -599,6 +608,20 @@ export class WorkflowManager {
     plan.title = `${tag} 自动混剪`;
     plan.description = `${tag} 高收藏插画自动收集与本地视频合成。`;
     plan.publish.tags = Array.from(new Set([tag, ...plan.publish.tags.filter(Boolean)])).slice(0, 10);
+  }
+
+  private applyPublishOverrides(plan: WorkflowPlan, overrides?: CreateWorkflowTaskRequest['publishOverrides']): void {
+    if (!overrides) return;
+    if (overrides.title?.trim()) plan.publish.title = this.clampText(overrides.title.trim(), 80);
+    if (overrides.description?.trim()) plan.publish.description = overrides.description.trim();
+    if (overrides.dynamic?.trim()) plan.publish.dynamic = this.clampText(overrides.dynamic.trim(), 233);
+    if (overrides.category?.trim()) plan.publish.category = overrides.category.trim();
+    if (overrides.tags) plan.publish.tags = Array.from(new Set(overrides.tags.map((tag) => tag.trim()).filter(Boolean))).slice(0, 10);
+    if (overrides.original !== undefined) plan.publish.original = Boolean(overrides.original);
+    if (overrides.aigc !== undefined) plan.publish.aigc = Boolean(overrides.aigc);
+    if (overrides.syncArticle !== undefined) plan.publish.syncArticle = Boolean(overrides.syncArticle);
+    if (overrides.articleTitle?.trim()) plan.publish.articleTitle = this.clampText(overrides.articleTitle.trim(), 80);
+    if (overrides.articleBody?.trim()) plan.publish.articleBody = overrides.articleBody.trim();
   }
 
   private maskPixivConfig(config: StandaloneConfig): Partial<StandaloneConfig> {
@@ -775,11 +798,34 @@ export class WorkflowManager {
     return coverPath;
   }
 
-  private async renderVideo(task: WorkflowTask, imagePaths: string[]): Promise<string> {
+  private rankVideoAssets(task: WorkflowTask, assets: WorkflowImageAsset[]): WorkflowImageAsset[] {
+    if (!task.plan) return assets;
+    const targetRatio = task.plan.video.width / task.plan.video.height;
+    const scored = assets
+      .map((asset, index) => {
+        const ratio = asset.width > 0 && asset.height > 0 ? asset.width / asset.height : targetRatio;
+        const ratioPenalty = Math.abs(Math.log(ratio / targetRatio));
+        const pixels = Math.max(asset.width * asset.height, 0);
+        return { asset, index, score: pixels / 1_000_000 - ratioPenalty * 2 };
+      })
+      .sort((a, b) => b.score - a.score || a.index - b.index);
+
+    const ordered: WorkflowImageAsset[] = [];
+    const pending = scored.map((item) => item.asset);
+    while (pending.length > 0) {
+      const previousPixivId = ordered[ordered.length - 1]?.pixivId;
+      const nextIndex = pending.findIndex((asset) => asset.pixivId && asset.pixivId !== previousPixivId);
+      ordered.push(pending.splice(nextIndex >= 0 ? nextIndex : 0, 1)[0]);
+    }
+    return ordered;
+  }
+
+  private async renderVideo(task: WorkflowTask, assets: WorkflowImageAsset[]): Promise<string> {
     if (!task.plan) {
       throw new Error('Workflow plan is missing');
     }
 
+    const imagePaths = assets.map((asset) => asset.path);
     const outputDir = resolve(process.cwd(), 'workflow_runs', task.id);
     mkdirSync(outputDir, { recursive: true });
 
@@ -803,6 +849,15 @@ export class WorkflowManager {
           maxImages: task.plan.video.maxImages,
           motion: task.plan.video.motion,
           bgmPath: task.plan.video.bgmPath,
+          disclaimer: task.plan.video.disclaimer,
+          imageCredits: assets.map((asset) => ({
+            path: asset.path,
+            pixivId: asset.pixivId,
+            title: asset.title,
+            authorName: asset.author?.name,
+            authorId: asset.author?.id,
+            authorAccount: asset.author?.account,
+          })),
         },
         null,
         2
@@ -839,21 +894,150 @@ export class WorkflowManager {
   }
 
   private async publishDryRun(task: WorkflowTask): Promise<void> {
-    this.startStage(task, 'publish', '执行 B站 dry-run 发布');
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 600));
+    this.startStage(task, 'publish', '生成 B站发布包');
+    const publishPackage = this.createBilibiliPublishPackage(task);
     task.publish = {
       status: 'dry_run_completed',
       platform: 'bilibili',
-      message: 'dry-run: 已生成发布配置，未调用 Bilibili API',
+      message: `dry-run: 已生成 B站发布包，未调用 Bilibili API。${basename(publishPackage.packagePath)}`,
+      packagePath: publishPackage.packagePath,
+      descriptionPath: publishPackage.descriptionPath,
+      articlePath: publishPackage.articlePath,
+      articleMarkdownPath: publishPackage.articleMarkdownPath,
+      title: publishPackage.title,
+      description: publishPackage.description,
+      dynamic: publishPackage.dynamic,
+      tags: publishPackage.tags,
+      category: publishPackage.category,
+      sourceCount: publishPackage.sources.length,
+      syncArticle: Boolean(publishPackage.articlePath),
       publishedAt: new Date().toISOString(),
     };
     task.latestArtifact = { type: 'publish', message: task.publish.message };
     task.requiresUserConfirmation = false;
     task.availableActions = [];
     task.status = 'published';
-    this.completeStage(task, 'publish', 'B站 dry-run 发布完成');
-    this.addLog(task, 'info', 'B站发布 dry-run 完成');
+    this.completeStage(task, 'publish', 'B站发布包生成完成');
+    this.addLog(task, 'info', `B站发布包已生成: ${publishPackage.packagePath}`);
     this.touch(task);
+  }
+
+  private createBilibiliPublishPackage(task: WorkflowTask): BilibiliPublishPackage {
+    const preview = this.createBilibiliPublishPreview(task);
+    const outputDir = resolve(process.cwd(), 'workflow_runs', task.id, 'publish');
+    mkdirSync(outputDir, { recursive: true });
+    const packagePath = join(outputDir, 'bilibili-publish.json');
+    const descriptionPath = join(outputDir, 'bilibili-description.txt');
+    const articlePath = preview.syncArticle ? join(outputDir, 'bilibili-article.json') : undefined;
+    const articleMarkdownPath = preview.syncArticle ? join(outputDir, 'bilibili-article.md') : undefined;
+
+    const payload: BilibiliPublishPackage = {
+      ...preview,
+      packagePath,
+      descriptionPath,
+      articlePath,
+      articleMarkdownPath,
+      createdAt: new Date().toISOString(),
+    };
+    writeFileSync(packagePath, JSON.stringify(payload, null, 2), 'utf-8');
+    writeFileSync(descriptionPath, preview.description, 'utf-8');
+    if (articlePath && articleMarkdownPath && preview.article) {
+      writeFileSync(articlePath, JSON.stringify({ ...preview.article, sources: preview.sources }, null, 2), 'utf-8');
+      writeFileSync(articleMarkdownPath, `# ${preview.article.title}\n\n${preview.article.body}\n`, 'utf-8');
+    }
+    return payload;
+  }
+
+  private createBilibiliPublishPreview(task: WorkflowTask): BilibiliPublishPreview {
+    if (!task.plan) {
+      throw new Error('Missing workflow plan for Bilibili publish preview');
+    }
+
+    const acceptedAssets = task.assets.filter((asset) => asset.status === 'accepted');
+    const sources = acceptedAssets
+      .filter((asset) => asset.pixivId || asset.author?.name)
+      .map((asset) => ({
+        pixivId: asset.pixivId,
+        title: asset.title,
+        authorName: asset.author?.name,
+        authorId: asset.author?.id,
+        url: asset.pixivId ? `https://www.pixiv.net/artworks/${asset.pixivId}` : undefined,
+      }));
+    const title = this.clampText(task.plan.publish.title || task.plan.title || `${task.plan.pixivTarget.tag ?? 'Pixiv'} 插画整理`, 80);
+    const tags = Array.from(new Set(task.plan.publish.tags.filter(Boolean))).slice(0, 10);
+    const description = task.plan.publish.description?.trim() || this.buildBilibiliDescription(task, sources);
+    const dynamic = this.clampText(task.plan.publish.dynamic || `${title} 已生成，来源信息见简介。`, 233);
+    const articleTitle = this.clampText(task.plan.publish.articleTitle || `${title}：来源与说明`, 80);
+    const articleBody = task.plan.publish.articleBody?.trim() || this.buildBilibiliArticle(task, sources);
+    return {
+      platform: 'bilibili',
+      mode: 'dry_run',
+      taskId: task.id,
+      videoPath: task.videoPath,
+      coverPath: task.coverPath,
+      title,
+      description,
+      category: task.plan.publish.category,
+      tags,
+      copyright: task.plan.publish.original ? 1 : 2,
+      noReprint: false,
+      source: 'Pixiv artwork collection',
+      dynamic,
+      aigc: task.plan.publish.aigc,
+      syncArticle: Boolean(task.plan.publish.syncArticle),
+      article: task.plan.publish.syncArticle
+        ? {
+            title: articleTitle,
+            body: articleBody,
+          }
+        : undefined,
+      sources,
+    };
+  }
+
+  private buildBilibiliDescription(
+    task: WorkflowTask,
+    sources: BilibiliPublishSource[]
+  ): string {
+    const lines = [
+      task.plan?.description || 'Pixiv 插画整理与展示。',
+      '',
+      '声明：本视频为 Pixiv 插画整理与展示，作品版权归原作者所有；画面右下角已标注作者与 Pixiv ID。',
+      '如原作者希望调整展示或移除内容，请联系处理。',
+      '',
+      '来源作品：',
+      ...sources.slice(0, 40).map((source, index) => {
+        const author = source.authorName ? `作者: ${source.authorName}${source.authorId ? ` (${source.authorId})` : ''}` : '作者: 未知';
+        const title = source.title ? `《${source.title}》` : '未命名作品';
+        const url = source.url ?? '无链接';
+        return `${index + 1}. ${title} / ${author} / ${url}`;
+      }),
+    ];
+    return lines.join('\n');
+  }
+
+  private buildBilibiliArticle(
+    task: WorkflowTask,
+    sources: BilibiliPublishSource[]
+  ): string {
+    const sourceLines = sources.slice(0, 80).map((source, index) => {
+      const title = source.title || '未命名作品';
+      const author = source.authorName || '未知作者';
+      return `${index + 1}. ${title} - ${author}${source.url ? `\n   ${source.url}` : ''}`;
+    });
+    return [
+      task.plan?.description || '本专栏整理本期视频使用的 Pixiv 来源作品。',
+      '',
+      '## 说明',
+      '本文用于同步记录视频中展示的作品来源。作品版权归原作者所有，视频与专栏仅用于整理展示与溯源。',
+      '',
+      '## 来源作品',
+      ...sourceLines,
+    ].join('\n');
+  }
+
+  private clampText(text: string, limit: number): string {
+    return text.length <= limit ? text : text.slice(0, limit);
   }
 
   private collectLocalImages(directory: string, limit: number): string[] {
@@ -1070,6 +1254,19 @@ export class WorkflowManager {
     return 'beat';
   }
 
+  private createDefaultDisclaimer() {
+    return {
+      enabled: true,
+      duration: 3,
+      title: '免责声明',
+      lines: [
+        '本视频为 Pixiv 插画整理与展示，作品版权归原作者所有。',
+        '画面右下角标注作者与 Pixiv ID，便于溯源与联系。',
+        '如原作者希望调整展示或移除内容，请联系处理。',
+      ],
+    };
+  }
+
   private pickAspectRatio(command: string, style: WorkflowVideoStyle): '16:9' | '9:16' | '1:1' {
     if (command.includes('竖屏') || command.includes('9:16')) return '9:16';
     if (command.includes('方形') || command.includes('1:1') || style === 'square') return '1:1';
@@ -1085,7 +1282,8 @@ export class WorkflowManager {
   private pickMotion(command: string, style: WorkflowVideoStyle): WorkflowVideoMotion {
     if (command.includes('无动效') || command.includes('静态')) return 'none';
     if (command.includes('卡点') || command.includes('快节奏')) return 'beat_zoom';
-    return style === 'soft' ? 'slow_zoom' : 'beat_zoom';
+    if (style === 'soft') return 'drift_zoom';
+    return 'auto';
   }
 
   private pickBgmPath(command: string): string | undefined {

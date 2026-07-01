@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { existsSync } from 'node:fs';
 import { workflowManager } from '../../workflow/WorkflowManager';
 import { CreateWorkflowTaskRequest } from '../../workflow/types';
+import { NotConfiguredBilibiliOpenPlatformPublisher } from '../../workflow/publishers/BilibiliOpenPlatformPublisher';
 import { defaultPresets, withWorkflowDatabase } from '../../workflow/workflow-store';
 import { AiSettingsRecord, CommandPresetRecord } from '../../storage/repositories/WorkflowRepository';
 
@@ -13,6 +14,22 @@ interface AiModelInfo {
   id: string;
   name: string;
   source?: string;
+}
+
+interface PublishCaptionRequest {
+  command?: string;
+  tag?: string;
+  sources?: Array<{ title?: string; authorName?: string; pixivId?: string; url?: string }>;
+  syncArticle?: boolean;
+}
+
+interface PublishCaptionResult {
+  title: string;
+  description: string;
+  tags: string[];
+  dynamic: string;
+  articleTitle?: string;
+  articleBody?: string;
 }
 
 function defaultBaseUrl(provider: AiProvider): string {
@@ -95,6 +112,69 @@ function maskBalancePayload(payload: unknown): unknown {
     return payload;
   }
   return payload;
+}
+
+function buildLocalPublishCaption(request: PublishCaptionRequest): PublishCaptionResult {
+  const tag = request.tag?.trim() || request.command?.trim().slice(0, 24) || 'Pixiv';
+  const sources = request.sources ?? [];
+  const sourceLines = sources.slice(0, 30).map((source, index) => {
+    const title = source.title || '未命名作品';
+    const author = source.authorName || '未知作者';
+    const url = source.url || (source.pixivId ? `https://www.pixiv.net/artworks/${source.pixivId}` : '');
+    return `${index + 1}. ${title} / ${author}${url ? ` / ${url}` : ''}`;
+  });
+  const title = `${tag} 插画整理`;
+  const description = [
+    `${tag} 主题 Pixiv 插画整理与展示。`,
+    '',
+    '声明：作品版权归原作者所有，视频右下角保留作者与 Pixiv ID。',
+    '如原作者希望调整展示或移除内容，请联系处理。',
+    '',
+    '来源作品：',
+    ...sourceLines,
+  ].join('\n');
+  const articleBody = [
+    `${tag} 主题视频同步专栏，用于记录本期展示作品来源。`,
+    '',
+    '## 来源作品',
+    ...sourceLines,
+  ].join('\n');
+  return {
+    title,
+    description,
+    tags: Array.from(new Set([tag, 'Pixiv', '插画', 'fanart'])).slice(0, 10),
+    dynamic: `${title} 已生成，来源与作者信息见简介。`,
+    articleTitle: `${title} 来源整理`,
+    articleBody,
+  };
+}
+
+function parseCaptionResult(body: unknown, fallback: PublishCaptionResult): PublishCaptionResult {
+  let text = '';
+  if (body && typeof body === 'object' && 'message' in body) {
+    text = String((body as { message?: { content?: string } }).message?.content || '');
+  } else if (body && typeof body === 'object' && 'choices' in body) {
+    text = String((body as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content || '');
+  } else if (body && typeof body === 'object' && 'content' in body) {
+    const content = (body as { content: unknown }).content;
+    text = Array.isArray(content)
+      ? content.map((item) => (item && typeof item === 'object' && 'text' in item ? String((item as { text: unknown }).text) : '')).join('\n')
+      : String(content);
+  }
+  const jsonText = text.match(/\{[\s\S]*\}/)?.[0] || text;
+  try {
+    const parsed = JSON.parse(jsonText) as Partial<PublishCaptionResult>;
+    return {
+      title: parsed.title?.trim() || fallback.title,
+      description: parsed.description?.trim() || fallback.description,
+      tags: Array.isArray(parsed.tags) ? parsed.tags.map(String).filter(Boolean).slice(0, 10) : fallback.tags,
+      dynamic: parsed.dynamic?.trim() || fallback.dynamic,
+      articleTitle: parsed.articleTitle?.trim() || fallback.articleTitle,
+      articleBody: parsed.articleBody?.trim() || fallback.articleBody,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 function getCurrentAiSettings(): AiSettingsRecord {
@@ -366,6 +446,82 @@ router.post('/ai-settings/balance', async (req: Request<unknown, unknown, Partia
   }
 });
 
+router.post('/publish-caption', async (req: Request<unknown, unknown, PublishCaptionRequest>, res: Response) => {
+  try {
+    const settings = getCurrentAiSettings();
+    const fallback = buildLocalPublishCaption(req.body);
+    if (settings.provider === 'local-rules') {
+      res.json({ data: { ...fallback, provider: 'local-rules' } });
+      return;
+    }
+    if (settings.provider !== 'ollama' && !settings.apiKey) {
+      res.status(400).json({ error: 'API Key is required to generate publish caption' });
+      return;
+    }
+
+    const prompt = [
+      '请为 B站视频投稿生成发布文案，必须只返回 JSON。',
+      'JSON 字段: title, description, tags, dynamic, articleTitle, articleBody。',
+      '要求: title 不超过 80 字；tags 最多 10 个；description 包含版权说明和 Pixiv 来源；articleBody 用 Markdown，适合同步发布专栏。',
+      `用户指令: ${req.body.command || ''}`,
+      `主题: ${req.body.tag || ''}`,
+      `同步专栏: ${req.body.syncArticle ? '是' : '否'}`,
+      `来源作品: ${JSON.stringify((req.body.sources || []).slice(0, 20))}`,
+    ].join('\n');
+    const baseUrl = normalizeBaseUrl(settings);
+    let body: unknown;
+    if (settings.provider === 'ollama') {
+      body = await fetchJson(
+        `${baseUrl}/api/chat`,
+        {
+          method: 'POST',
+          headers: aiHeaders(settings),
+          body: JSON.stringify({
+            model: settings.model,
+            messages: [{ role: 'user', content: prompt }],
+            stream: false,
+          }),
+        },
+        30000
+      );
+    } else if (settings.provider === 'anthropic') {
+      body = await fetchJson(
+        `${baseUrl}/v1/messages`,
+        {
+          method: 'POST',
+          headers: aiHeaders(settings),
+          body: JSON.stringify({
+            model: settings.model,
+            max_tokens: 1600,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+        },
+        30000
+      );
+    } else {
+      body = await fetchJson(
+        `${baseUrl}/chat/completions`,
+        {
+          method: 'POST',
+          headers: aiHeaders(settings),
+          body: JSON.stringify({
+            model: settings.model,
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 1600,
+            temperature: 0.7,
+          }),
+        },
+        30000
+      );
+    }
+
+    res.json({ data: { ...parseCaptionResult(body, fallback), provider: settings.provider } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(502).json({ error: message, message });
+  }
+});
+
 router.get('/tasks/:taskId', (req: Request, res: Response) => {
   const task = workflowManager.getTask(req.params.taskId);
   if (!task) {
@@ -390,6 +546,35 @@ router.get('/tasks/:taskId/cover', (req: Request, res: Response) => {
     res.sendFile(coverPath);
   } catch (error) {
     res.status(404).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.get('/tasks/:taskId/publish/preview', (req: Request, res: Response) => {
+  try {
+    const preview = workflowManager.previewBilibiliPublish(req.params.taskId);
+    res.json({ data: preview });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/tasks/:taskId/publish/bilibili-open-platform', async (req: Request, res: Response) => {
+  try {
+    const preview = workflowManager.previewBilibiliPublish(req.params.taskId);
+    const publisher = new NotConfiguredBilibiliOpenPlatformPublisher(req.body?.credentials);
+    const videoResult = await publisher.publishVideo(preview);
+    const articleResult = preview.syncArticle && publisher.publishArticle
+      ? await publisher.publishArticle(preview)
+      : undefined;
+    res.json({
+      data: {
+        video: videoResult,
+        article: articleResult,
+        preview,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 
