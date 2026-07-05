@@ -107,7 +107,7 @@ Artflow-core 的重点是把“素材获取”扩展成完整的内容生产流�
 
 本仓库是 **Artflow-core** 后端。前端项目位于独立仓库 **Artflow-studio**，两者通过 HTTP API 连接。
 
-项目来源：本项目在 GPL-3.0-or-later 许可下基于上游 GPL 项目二次开发，保留原许可证与必要声明；日常使用和维护以 Artflow 为准。
+项目来源：本项目在 GPL-3.0-or-later 许可下基于 PixivFlow 二次开发，保留原许可证与必要声明；日常使用和维护以 Artflow 为准。
 
 当前 Artflow 扩展能力包括：
 
