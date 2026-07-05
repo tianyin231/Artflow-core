@@ -94,7 +94,8 @@ export async function loginWithPuppeteerHeadless(
       throw launchError;
     }
     
-    const page = await browser.newPage();
+    const pages = await browser.pages();
+    const page = pages[0] || await browser.newPage();
     
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -229,7 +230,7 @@ export async function loginWithPuppeteerHeadless(
     console.log('[i]: Exchanging code for access token...');
     
     // Exchange code for token
-    const loginInfo = await exchangeCodeForToken(code, codeVerifier);
+    const loginInfo = await exchangeCodeForToken(code, codeVerifier, proxy);
     
     console.log('[+]: Login successful!');
     
@@ -269,8 +270,6 @@ export async function loginWithPuppeteerHeadless(
     return null;
   }
 }
-
-
 
 
 

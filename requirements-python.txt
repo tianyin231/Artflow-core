@@ -1,0 +1,6 @@
+gppt
+imageio-ffmpeg
+moviepy
+numpy
+pillow
+proglog

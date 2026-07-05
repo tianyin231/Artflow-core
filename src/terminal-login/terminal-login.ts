@@ -73,8 +73,7 @@ export class TerminalLogin {
    * 
    * Reference: https://github.com/eggplants/get-pixivpy-token
    */
-  static async refresh(refreshTokenValue: string): Promise<LoginInfo> {
-    return refreshToken(refreshTokenValue);
+  static async refresh(refreshTokenValue: string, proxy?: ProxyConfig): Promise<LoginInfo> {
+    return refreshToken(refreshTokenValue, proxy);
   }
 }
-

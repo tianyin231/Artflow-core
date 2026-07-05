@@ -1,13 +1,13 @@
 #!/bin/bash
 ################################################################################
-# PixivFlow - Python 依赖安装脚本
-# 描述: 自动检测并安装 Python 和 gppt 库
+# Artflow-core - Python 依赖安装脚本
+# 描述: 自动检测并安装 Python 登录和视频渲染依赖
 #
 # 功能:
 # - 检测 Python 3.9+ 是否已安装
 # - 如果未安装，提供安装指导
-# - 检测 gppt 是否已安装
-# - 如果未安装，自动安装 gppt
+# - 检测 gppt 和视频渲染依赖是否已安装
+# - 如果未安装，自动安装 requirements-python.txt 中的依赖
 # - 验证安装是否成功
 ################################################################################
 
@@ -24,6 +24,7 @@ init_script
 
 readonly PYTHON_MIN_VERSION="3.9"
 readonly GPTT_PACKAGE="gppt"
+readonly REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements-python.txt"
 
 # ============================================================================
 # Python 检测和安装
@@ -185,7 +186,7 @@ check_pip() {
 }
 
 # ============================================================================
-# gppt 检测和安装
+# Python 包检测和安装
 # ============================================================================
 
 # 检查 gppt 是否已安装
@@ -246,6 +247,45 @@ install_gppt() {
     fi
 }
 
+check_video_render_deps() {
+    local python_cmd="$1"
+
+    if "$python_cmd" -c "import numpy; import imageio_ffmpeg; import moviepy; import PIL; import proglog; print('OK')" >/dev/null 2>&1; then
+        log_success "视频渲染依赖已安装"
+        return 0
+    else
+        log_warn "视频渲染依赖未安装完整"
+        return 1
+    fi
+}
+
+install_requirements() {
+    local python_cmd="$1"
+
+    if [[ ! -f "$REQUIREMENTS_FILE" ]]; then
+        log_error "缺少依赖清单: $REQUIREMENTS_FILE"
+        return 1
+    fi
+
+    print_subheader "安装 Artflow Python 依赖"
+    log_info "正在安装 requirements-python.txt..."
+    echo
+
+    if "$python_cmd" -m pip install -r "$REQUIREMENTS_FILE" 2>&1 | tee /tmp/artflow_python_deps_install.log; then
+        if check_gppt "$python_cmd" && check_video_render_deps "$python_cmd"; then
+            log_success "Python 依赖安装成功"
+            return 0
+        fi
+        log_error "Python 依赖安装后验证失败"
+        log_info "安装日志已保存到: /tmp/artflow_python_deps_install.log"
+        return 1
+    fi
+
+    log_error "Python 依赖安装失败"
+    log_info "安装日志已保存到: /tmp/artflow_python_deps_install.log"
+    return 1
+}
+
 # ============================================================================
 # Chrome/ChromeDriver 检测（可选）
 # ============================================================================
@@ -273,7 +313,7 @@ check_chrome() {
 install_python_deps() {
     local skip_python_check="${1:-false}"
     
-    print_header "PixivFlow - Python 依赖安装"
+    print_header "Artflow-core - Python 依赖安装"
     
     log_info "开始检查 Python 环境..."
     echo
@@ -307,14 +347,23 @@ install_python_deps() {
     
     # 检查 pip
     if ! check_pip "$python_cmd"; then
-        log_error "pip 不可用，无法安装 gppt"
+        log_error "pip 不可用，无法安装 Python 依赖"
         return 1
     fi
     
     echo
     
-    # 检查 gppt
+    # 检查 Python 包
+    local gppt_ready=false
+    local render_ready=false
     if check_gppt "$python_cmd"; then
+        gppt_ready=true
+    fi
+    if check_video_render_deps "$python_cmd"; then
+        render_ready=true
+    fi
+
+    if [[ "$gppt_ready" == "true" && "$render_ready" == "true" ]]; then
         log_success "所有 Python 依赖已就绪"
         echo
         check_chrome
@@ -323,12 +372,12 @@ install_python_deps() {
     
     echo
     
-    # 安装 gppt
-    if ! install_gppt "$python_cmd"; then
-        log_error "gppt 安装失败"
+    # 安装依赖清单
+    if ! install_requirements "$python_cmd"; then
+        log_error "Python 依赖安装失败"
         echo
         log_info "手动安装方法："
-        echo "  ${COLOR_CYAN}$python_cmd -m pip install gppt${COLOR_RESET}"
+        echo "  ${COLOR_CYAN}$python_cmd -m pip install -r requirements-python.txt${COLOR_RESET}"
         return 1
     fi
     
@@ -350,7 +399,7 @@ install_python_deps() {
 show_help() {
     cat << EOF
 ╔════════════════════════════════════════════════════════════════╗
-║            PixivFlow - Python 依赖安装工具                     ║
+║            Artflow-core - Python 依赖安装工具                  ║
 ╚════════════════════════════════════════════════════════════════╝
 
 🚀 使用:
@@ -363,7 +412,7 @@ show_help() {
 💡 功能:
     - 自动检测 Python 3.9+ 是否已安装
     - 如果未安装，提供安装指导
-    - 自动检测并安装 gppt 库
+    - 自动检测并安装 gppt 和视频渲染依赖
     - 验证安装是否成功
 
 📚 说明:
@@ -400,4 +449,3 @@ main() {
 
 # 执行主函数
 main "$@"
-

@@ -10,7 +10,15 @@ import { ExecutionRepository } from './repositories/ExecutionRepository';
 import { SchedulerRepository } from './repositories/SchedulerRepository';
 import { ConfigHistoryRepository } from './repositories/ConfigHistoryRepository';
 import { TaskHistoryRepository } from './repositories/TaskHistoryRepository';
-import { AiSettingsRecord, CommandPresetRecord, WorkflowRepository } from './repositories/WorkflowRepository';
+import {
+  AiSettingsRecord,
+  BilibiliPublishSettingsRecord,
+  CommandPresetRecord,
+  PublishJobRecord,
+  PublishJobStatus,
+  WorkflowRepository,
+  WorkflowScheduleRecord,
+} from './repositories/WorkflowRepository';
 import { WorkflowTask } from '../workflow/types';
 
 export interface AccessTokenStore {
@@ -118,6 +126,14 @@ export class Database implements IDatabase {
 
   public isDownloaded(pixivId: string, type: 'illustration' | 'novel', filePath: string): boolean {
     return this.downloadRepo.isDownloaded(pixivId, type, filePath);
+  }
+
+  public getDownloadByFilePath(filePath: string) {
+    return this.downloadRepo.getDownloadByFilePath(filePath);
+  }
+
+  public getDownloadByPixivId(pixivId: string) {
+    return this.downloadRepo.getDownloadByPixivId(pixivId);
   }
 
   public getDownloadedIds(pixivIds: string[], type: 'illustration' | 'novel'): Set<string> {
@@ -561,6 +577,63 @@ export class Database implements IDatabase {
 
   public saveAiSettings(settings: AiSettingsRecord): AiSettingsRecord {
     return this.workflowRepo.saveAiSettings(settings);
+  }
+
+  public listWorkflowSchedules(): WorkflowScheduleRecord[] {
+    return this.workflowRepo.listSchedules();
+  }
+
+  public getWorkflowSchedule(id: string): WorkflowScheduleRecord | null {
+    return this.workflowRepo.getSchedule(id);
+  }
+
+  public upsertWorkflowSchedule(schedule: WorkflowScheduleRecord): WorkflowScheduleRecord {
+    return this.workflowRepo.upsertSchedule(schedule);
+  }
+
+  public deleteWorkflowSchedule(id: string): boolean {
+    return this.workflowRepo.deleteSchedule(id);
+  }
+
+  public updateWorkflowScheduleRun(
+    id: string,
+    data: {
+      lastTaskId?: string;
+      lastRunAt?: string;
+      lastStatus?: 'success' | 'failed' | 'running';
+      lastError?: string;
+    }
+  ): void {
+    this.workflowRepo.updateScheduleRun(id, data);
+  }
+
+  public listPublishJobs(limit = 200): PublishJobRecord[] {
+    return this.workflowRepo.listPublishJobs(limit);
+  }
+
+  public getPublishJob(id: string): PublishJobRecord | null {
+    return this.workflowRepo.getPublishJob(id);
+  }
+
+  public upsertPublishJob(job: PublishJobRecord): PublishJobRecord {
+    return this.workflowRepo.upsertPublishJob(job);
+  }
+
+  public updatePublishJob(
+    id: string,
+    update: { status: PublishJobStatus; result?: unknown; error?: string }
+  ): PublishJobRecord | null {
+    return this.workflowRepo.updatePublishJob(id, update);
+  }
+
+  public getBilibiliPublishSettings(): BilibiliPublishSettingsRecord | null {
+    return this.workflowRepo.getBilibiliPublishSettings();
+  }
+
+  public saveBilibiliPublishSettings(
+    settings: BilibiliPublishSettingsRecord
+  ): BilibiliPublishSettingsRecord {
+    return this.workflowRepo.saveBilibiliPublishSettings(settings);
   }
 
   public close() {

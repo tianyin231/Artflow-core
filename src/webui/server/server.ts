@@ -32,6 +32,7 @@ import path from 'path';
 import { logger } from '../../logger';
 import { Database } from '../../storage/Database';
 import { loadConfig, getConfigPath } from '../../config';
+import { workflowScheduler } from '../../workflow/WorkflowScheduler';
 
 // WebSocket handlers
 import { setupLogStream } from '../websocket/LogStream';
@@ -174,6 +175,13 @@ export async function startWebUI(
 
   const server = new WebUIServer(options);
   const actualPort = await server.start();
+  try {
+    workflowScheduler.restore();
+  } catch (error) {
+    logger.warn('Failed to restore workflow schedules', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -187,4 +195,3 @@ export async function startWebUI(
 
   return actualPort;
 }
-

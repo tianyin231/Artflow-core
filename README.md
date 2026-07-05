@@ -1,28 +1,16 @@
-# 🎨 PixivFlow
+# Artflow-core
 
 <div align="center">
 
-**智能的 Pixiv 自动化下载工具 | Intelligent Pixiv Automation Downloader**
+**Artflow 后端服务 | Pixiv 素材工作流与视频生成引擎**
 
-让 Pixiv 作品收集变得优雅而高效 | Make Pixiv artwork collection elegant and efficient
+面向私有部署的 Pixiv 素材采集、AI 工作流、视频合成和发布任务后端。
 
-> 🎯 **PixivFlow** 是一个专业的 Pixiv 批量下载工具，支持插画和小说下载、定时任务、Docker 部署。适用于个人用户和服务器自动化场景。
-
-> 📖 **[查看完整教程文档](https://zoidberg-xgd.github.io/PixivFlow/)** - 包含详细的使用教程、配置说明、部署指南和最佳实践
-
-<!-- SEO Keywords: pixiv downloader, pixiv批量下载, pixiv自动化下载, pixiv批量下载工具, pixiv下载器, pixiv artwork downloader, pixiv novel downloader, pixiv cli tool, pixiv scheduler, pixiv automation, pixiv批量下载脚本, pixiv下载工具, pixiv作品下载, pixiv插画下载, pixiv小说下载, pixiv定时下载, pixiv爬虫, pixiv api client, pixiv命令行工具, pixiv服务器部署, pixiv docker, pixiv webui, pixiv管理界面 -->
-
-[![GitHub stars](https://img.shields.io/github/stars/zoidberg-xgd/pixivflow?style=for-the-badge&logo=github)](https://github.com/zoidberg-xgd/pixivflow/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/zoidberg-xgd/pixivflow?style=for-the-badge&logo=github)](https://github.com/zoidberg-xgd/pixivflow/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/zoidberg-xgd/pixivflow?style=for-the-badge&logo=github)](https://github.com/zoidberg-xgd/pixivflow/issues)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B%20LTS-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)](https://github.com/zoidberg-xgd/pixivflow)
-[![Maintenance](https://img.shields.io/badge/Maintained-yes-green.svg?style=for-the-badge)](https://github.com/zoidberg-xgd/pixivflow/graphs/commit-activity)
-
-[📖 完整教程文档](https://zoidberg-xgd.github.io/PixivFlow/) | [English](README_EN.md) | [中文](README.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)](#)
 
 </div>
 
@@ -30,21 +18,21 @@
 
 ## 快速导航
 
-[功能特性](#功能特性) • [快速开始](#快速开始) • [使用指南](#cli-命令行工具) • [配置说明](#核心配置) • [完整文档](docs/README.md)
+[功能特性](#功能特性) • [快速开始](#快速开始) • [使用指南](#cli-命令行工具) • [配置说明](#核心配置)
 
 ---
 
-<a id="什么是-pixivflow"></a>
-## 什么是 PixivFlow？
+<a id="什么是-artflow-core"></a>
+## 什么是 Artflow-core？
 
-**PixivFlow** 是一个**完全独立运行**的 Pixiv 作品批量下载工具，专为自动化设计。无需浏览器扩展，可在命令行或服务器上自动化运行，支持定时任务、智能去重、断点续传等功能。
+**Artflow-core** 是 Artflow 的后端服务，负责 Pixiv 素材抓取、任务编排、AI-first 工作流、视频生成、发布包生成和 Web API。
 
-作为一款专业的 **Pixiv 下载器**，PixivFlow 提供批量下载、URL 直接下载、定时任务、Docker 部署等核心功能，无论是个人使用还是服务器部署，都能帮助你高效地收集和管理 Pixiv 作品。
+项目仍保留独立 CLI 能力，可在命令行或服务器上运行，也可以配合 **Artflow-studio** 作为可视化工作台使用。
 
-<a id="为什么选择-pixivflow"></a>
-### 为什么选择 PixivFlow？
+<a id="为什么选择-artflow-core"></a>
+### 为什么选择 Artflow-core？
 
-与其他 Pixiv 下载工具相比，PixivFlow 专注于**自动化**和**服务器部署**场景：
+Artflow-core 的重点是把“素材获取”扩展成完整的内容生产流程：
 
 | 优势 | 说明 |
 |------|------|
@@ -115,9 +103,20 @@
 > **登录说明**：项目默认使用 Node.js 库进行登录，**无需 Python**。Python gppt 仅作为后备方案（可选）。  
 > **详细指南**：查看 [快速开始指南](docs/QUICKSTART.md)
 
-### Artflow 私有部署说明
+### 部署说明
 
-本仓库是基于 PixivFlow 的私有二次开发后端，当前作为 **Artflow-core** 使用。后端仍可独立运行，前端项目位于独立仓库 **Artflow-studio**。
+本仓库是 **Artflow-core** 后端。前端项目位于独立仓库 **Artflow-studio**，两者通过 HTTP API 连接。
+
+项目来源：本项目在 GPL-3.0-or-later 许可下基于上游 GPL 项目二次开发，保留原许可证与必要声明；日常使用和维护以 Artflow 为准。
+
+当前 Artflow 扩展能力包括：
+
+- 仪表盘工作流：自然语言任务、Pixiv 抓取、素材预过滤、封面确认、视频生成、发布包生成。
+- AI-first 工作流：已配置 OpenAI 兼容模型时，会让 AI 参与规划、BGM 搜索/选择、镜头动效和发布文案生成；AI 调用失败会停止流程并写入日志。
+- 视频生成：使用 `scripts/workflow-render-video.py` 合成视频，支持作者/Pixiv 来源角标、镜头动效配方、封面生成、人工审核后继续。
+- BGM：支持指定本地 BGM 路径，或扫描 `bgm/`、`music/`、`assets/bgm/`、`assets/music/` 下的音频；未指定时才会尝试 AI 选择和联网下载。
+- B站发布：当前会生成发布包，并支持开放平台视频投稿接口；真实提交需要配置 B站开放平台 `Client ID`、`Client Secret` 和 `Access Token`。专栏同步接口仍是预留/排队状态。
+- 定时工作流和发布任务：支持保存工作流计划、定时运行、生成发布任务并手动提交。
 
 在新电脑上部署时，按普通 Git 项目安装即可：
 
@@ -125,6 +124,7 @@
 git clone https://github.com/tianyin231/Artflow-core.git
 cd Artflow-core
 npm install
+npm run setup:python
 npm run build
 ```
 
@@ -152,6 +152,13 @@ cp config/standalone.config.example.json config/standalone.config.json
 
 这些内容由 `.gitignore` 排除，属于本机配置、运行数据或构建产物。
 
+隐私与上传说明：
+
+- Pixiv 下载会请求 Pixiv 官方接口，并使用本地配置中的 Pixiv 登录凭证。
+- AI-first 模式会把任务指令、视频规划、部分素材元数据、BGM 候选名称等文本发送到你配置的 AI 服务；不会上传图片或视频文件本体。
+- 自动联网 BGM 搜索会向外部音频库发送搜索词；指定本地 BGM 时不会进入 AI/联网选曲。
+- B站投稿只有在手动提交发布任务时才会上传视频、封面和投稿文本。
+
 常用运行命令：
 
 ```bash
@@ -173,28 +180,29 @@ rm -rf node_modules
 npm install
 ```
 
-视频生成依赖 `scripts/workflow-render-video.py`，需要目标机器具备可用的 Python 环境以及脚本所需的图像/视频处理依赖。
-
-<a id="快速安装推荐"></a>
-### 快速安装（推荐）
-
-#### 方式 1：从 npm 安装（最简单）
+视频生成依赖 `scripts/workflow-render-video.py` 和 Python 图像/视频处理包。新环境需要执行：
 
 ```bash
-# 全局安装
-npm install -g pixivflow
-
-# 验证安装
-pixivflow --help
-
-# 登录账号
-pixivflow login
-
-# 开始下载
-pixivflow download
+npm run setup:python
 ```
 
-> 👇 也可以直接指定配置文件路径运行：
+该命令会安装 `requirements-python.txt` 中的依赖，包括登录后备库 `gppt` 以及视频渲染所需的 `moviepy`、`pillow`、`numpy`、`imageio-ffmpeg`、`proglog`。
+
+<a id="快速安装推荐"></a>
+### 快速运行（推荐）
+
+#### 方式 1：从 Artflow-core 源码运行
+
+```bash
+git clone https://github.com/tianyin231/Artflow-core.git
+cd Artflow-core
+npm install
+npm run setup:python
+npm run build
+npm run webui
+```
+
+当前兼容 CLI 命令仍为 `pixivflow`，可以直接指定配置文件运行：
 
 ```bash
 # 使用 --config 指定配置
@@ -205,20 +213,10 @@ export PIXIV_DOWNLOADER_CONFIG="$(pwd)/config/standalone.config.json"
 pixivflow download
 ```
 
-#### 方式 2：从源码安装
+#### 方式 2：命令行下载
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/zoidberg-xgd/pixivflow.git
-cd pixivflow
-
-# 2. 安装依赖
-npm install
-
-# 3. 登录账号
 npm run login
-
-# 4. 开始下载
 npm run download
 ```
 
@@ -232,7 +230,7 @@ npm run download
 
 > **提示**：
 > - 配置文件位于 `~/.pixivflow/config/standalone.config.json`，或使用 `--config` 指定路径
-> - 首次使用需要运行 `pixivflow login` 进行登录
+> - 首次使用需要运行 `npm run login` 或 `pixivflow login` 进行登录
 > - **更多安装方式**：从源码安装、Docker 部署等，请查看 [快速开始指南](docs/QUICKSTART.md)
 > - **配置文件管理**：查看 [配置指南](docs/CONFIG.md) 了解配置文件的使用方法
 
@@ -240,7 +238,7 @@ npm run download
 
 ### WebUI 后端 API（可选）
 
-PixivFlow 提供了 WebUI 后端 API 服务，支持通过 RESTful API 和 WebSocket 进行管理：
+Artflow-core 提供 WebUI 后端 API 服务，支持通过 RESTful API 和 WebSocket 进行管理：
 
 ```bash
 # 启动 WebUI 后端 API 服务
@@ -259,8 +257,8 @@ PORT=8080 pixivflow webui
 - **文件管理 API**：文件列表、预览、操作
 
 > **说明**：
-> - PixivFlow 只提供后端 API，不包含前端界面
-> - **前端项目**：现代化的 React 前端界面请查看 [pixivflow-webui](https://github.com/zoidberg-xgd/pixivflow-webui)
+> - Artflow-core 只提供后端 API，不包含前端界面
+> - **前端项目**：React 前端界面请使用 **Artflow-studio**
 > - 可以通过 API 直接调用，或连接其他前端项目
 > - **API 文档**：查看 [使用指南](docs/USAGE.md) 了解详细的 API 使用方法
 
@@ -283,7 +281,7 @@ docker-compose up -d             # 启动服务
 
 ## CLI 命令行工具
 
-> **推荐使用**：全局安装后可直接使用 `pixivflow` 命令，无需依赖项目目录中的脚本。
+> **说明**：当前兼容 CLI 命令名仍为 `pixivflow`，可在项目目录或全局安装后使用。
 
 <a id="核心命令"></a>
 ### 核心命令
@@ -374,9 +372,9 @@ pixivflow backup                     # 自动备份配置和数据
 
 <a id="脚本工具"></a>
 
-PixivFlow 提供了丰富的脚本工具，所有脚本直接调用内置 CLI，性能更好、响应更快。
+Artflow-core 保留了丰富的脚本工具，所有脚本直接调用内置 CLI，性能更好、响应更快。
 
-> **说明**：PixivFlow 完全独立，可在任何环境运行（服务器、Docker、CI/CD）。所有功能都可通过命令行使用。
+> **说明**：Artflow-core 可独立运行在服务器、Docker、CI/CD 等环境。常规下载和维护功能都可通过命令行使用。
 
 ### 主控脚本（最常用）
 
@@ -574,11 +572,11 @@ pixivflow config edit
 
 | 类型 | 渠道 | 说明 |
 |------|------|------|
-| 🐛 **Bug 反馈** | [GitHub Issues](https://github.com/zoidberg-xgd/pixivflow/issues) | 报告问题和错误 |
-| 💡 **功能建议** | [GitHub Discussions](https://github.com/zoidberg-xgd/pixivflow/discussions) | 提出新功能想法 |
+| 🐛 **Bug 反馈** | 当前仓库 Issues | 报告问题和错误 |
+| 💡 **功能建议** | 当前仓库 Discussions | 提出新功能想法 |
 | 📖 **使用问题** | [查看文档](docs/README.md) | 查阅完整文档 |
 | ✅ **环境检查** | `./scripts/pixiv.sh health` | 运行健康检查 |
-| 💬 **社区交流** | [Discussions](https://github.com/zoidberg-xgd/pixivflow/discussions) | 与其他用户交流 |
+| 💬 **本地排查** | `./scripts/pixiv.sh logs` | 查看运行日志 |
 
 **提问前请先**：
 1. 🔍 查看 [常见问题](#常见问题) 章节
@@ -588,21 +586,8 @@ pixivflow config edit
 
 ---
 
-<a id="项目统计"></a>
-## 项目统计
-
-<div align="center">
-
-### 项目数据
-
-![GitHub repo size](https://img.shields.io/github/repo-size/zoidberg-xgd/pixivflow?style=flat-square)
-![GitHub language count](https://img.shields.io/github/languages/count/zoidberg-xgd/pixivflow?style=flat-square)
-![GitHub top language](https://img.shields.io/github/languages/top/zoidberg-xgd/pixivflow?style=flat-square)
-![GitHub last commit](https://img.shields.io/github/last-commit/zoidberg-xgd/pixivflow?style=flat-square)
-
-</div>
-
-### 性能指标
+<a id="性能指标"></a>
+## 性能指标
 
 - ⚡ **启动速度**：< 2 秒
 - 📦 **包大小**：< 5 MB（不含依赖）
@@ -657,26 +642,20 @@ pixivflow config edit
 
 <div align="center">
 
-### ⭐ Star 这个项目
-
-**[⭐ Star on GitHub](https://github.com/zoidberg-xgd/pixivflow)** - 让更多人发现 PixivFlow！
+### Artflow-core
 
 ---
 
-Made with ❤️ by [zoidberg-xgd](https://github.com/zoidberg-xgd)
+Artflow-core
 
-**PixivFlow** - 让 Pixiv 作品收集变得优雅而高效
+Pixiv 素材工作流与视频生成后端。
 
-[⬆ 回到顶部](#pixivflow)
+[⬆ 回到顶部](#artflow-core)
 
 ---
 
 **相关链接**：
-- [npm 包](https://www.npmjs.com/package/pixivflow)
-- [GitHub 仓库](https://github.com/zoidberg-xgd/PixivFlow)
-- [前端项目 (pixivflow-webui)](https://github.com/zoidberg-xgd/pixivflow-webui)
 - [完整文档](docs/README.md)
-- [问题反馈](https://github.com/zoidberg-xgd/PixivFlow/issues)
-- [讨论区](https://github.com/zoidberg-xgd/PixivFlow/discussions)
+- [前端项目：Artflow-studio](../Artflow-studio)
 
 </div>

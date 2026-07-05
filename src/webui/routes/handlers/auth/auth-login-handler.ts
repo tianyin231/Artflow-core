@@ -75,6 +75,7 @@ export async function login(req: Request, res: Response): Promise<void> {
         username: username || undefined,
         password: password || undefined,
         proxy: proxyConfig,
+        forcePython: !!proxyConfig?.enabled,
       });
 
       if (!loginInfo) {
@@ -138,7 +139,7 @@ export async function login(req: Request, res: Response): Promise<void> {
  */
 export async function loginWithToken(req: Request, res: Response): Promise<void> {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken, skipValidation = false, proxy } = req.body;
 
     if (!refreshToken || typeof refreshToken !== 'string' || refreshToken.trim() === '') {
       res.status(400).json({
@@ -149,26 +150,40 @@ export async function loginWithToken(req: Request, res: Response): Promise<void>
     }
 
     const trimmedToken = refreshToken.trim();
-    logger.info('Validating refresh token...');
+    logger.info(skipValidation ? 'Saving refresh token without immediate validation...' : 'Validating refresh token...');
 
-    // Validate token by attempting to refresh it
-    let loginInfo;
-    try {
-      loginInfo = await TerminalLogin.refresh(trimmedToken);
-      logger.info('Refresh token validated successfully');
-    } catch (error) {
-      logger.error('Refresh token validation failed', { error });
-      res.status(401).json({
-        errorCode: ErrorCode.AUTH_REFRESH_FAILED,
-        message: error instanceof Error ? error.message : 'Invalid refresh token',
-      });
-      return;
+    let proxyConfig = proxy;
+    if (!proxyConfig) {
+      const configPath = getConfigPath();
+      try {
+        const config = loadConfig(configPath);
+        if (config.network?.proxy?.enabled) {
+          proxyConfig = config.network.proxy;
+        }
+      } catch (error) {
+        logger.debug('Could not load config for token validation proxy settings, proceeding without proxy', { error });
+      }
+    }
+
+    let loginInfo: Awaited<ReturnType<typeof TerminalLogin.refresh>> | undefined;
+    if (!skipValidation) {
+      try {
+        loginInfo = await TerminalLogin.refresh(trimmedToken, proxyConfig);
+        logger.info('Refresh token validated successfully');
+      } catch (error) {
+        logger.error('Refresh token validation failed', { error });
+        res.status(401).json({
+          errorCode: ErrorCode.AUTH_REFRESH_FAILED,
+          message: error instanceof Error ? error.message : 'Invalid refresh token',
+        });
+        return;
+      }
     }
 
     // Update config file with the refresh token
     const configPath = getConfigPath();
     try {
-      await updateConfigWithToken(configPath, trimmedToken);
+      await updateConfigWithToken(configPath, loginInfo?.refresh_token || trimmedToken);
       logger.info('Config file updated successfully with refresh token');
     } catch (error) {
       logger.error('Failed to update config file with refresh token', { error });
@@ -181,10 +196,11 @@ export async function loginWithToken(req: Request, res: Response): Promise<void>
       success: true,
       errorCode: ErrorCode.AUTH_LOGIN_SUCCESS,
       data: {
-        accessToken: loginInfo.access_token,
-        refreshToken: loginInfo.refresh_token,
-        expiresIn: loginInfo.expires_in,
-        user: loginInfo.user,
+        accessToken: loginInfo?.access_token,
+        refreshToken: loginInfo?.refresh_token || trimmedToken,
+        expiresIn: loginInfo?.expires_in,
+        user: loginInfo?.user,
+        tokenValid: !skipValidation,
       },
     });
   } catch (error) {
@@ -195,4 +211,3 @@ export async function loginWithToken(req: Request, res: Response): Promise<void>
     });
   }
 }
-

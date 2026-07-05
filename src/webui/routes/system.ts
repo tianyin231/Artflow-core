@@ -3,8 +3,11 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { getConfigPath, loadConfig } from '../../config';
 import { withWorkflowDatabase } from '../../workflow/workflow-store';
+import { Database } from '../../storage/Database';
+import { isPlaceholderToken } from '../../utils/token-manager';
 
 const router = Router();
 
@@ -47,6 +50,25 @@ async function canWriteDirectory(path: string): Promise<boolean> {
   return true;
 }
 
+function checkVideoRenderPythonDeps(): { ok: true } | { ok: false; detail: string } {
+  try {
+    execFileSync('python', [
+      '-c',
+      'import numpy; import imageio_ffmpeg; import moviepy; import PIL; import proglog; print("OK")',
+    ], {
+      encoding: 'utf-8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 router.get('/check', async (req: Request, res: Response) => {
   const items: SystemCheckItem[] = [];
   let config: ReturnType<typeof loadConfig> | undefined;
@@ -64,10 +86,16 @@ router.get('/check', async (req: Request, res: Response) => {
       '进入配置管理页面修复 JSON、路径和必填字段，或重新运行初始化配置。',
       error instanceof Error ? error.message : String(error)
     ));
+
+    try {
+      config = loadConfig(configPath, true);
+    } catch {
+      config = undefined;
+    }
   }
 
   const refreshToken = config?.pixiv?.refreshToken;
-  const hasPixivToken = Boolean(refreshToken && !['YOUR_REFRESH_TOKEN_HERE', ''].includes(refreshToken));
+  const hasPixivToken = Boolean(refreshToken && !isPlaceholderToken(refreshToken));
   items.push(item(
     'pixiv-auth',
     'Pixiv 登录',
@@ -113,18 +141,49 @@ router.get('/check', async (req: Request, res: Response) => {
     rendererPath
   ));
 
-  const aiSettings = withWorkflowDatabase((database) => database.getAiSettings());
-  if (!aiSettings || aiSettings.provider === 'local-rules') {
-    items.push(item('ai-caption', 'AI 发布文案', 'warning', '当前使用本地规则生成文案', '如需更高质量文案，在 AI 接入页配置 OpenAI/Anthropic/Ollama。'));
-  } else {
-    const needsApiKey = aiSettings.provider !== 'ollama';
-    const ready = !needsApiKey || Boolean(aiSettings.apiKey);
+  const renderDeps = checkVideoRenderPythonDeps();
+  items.push(item(
+    'video-renderer-python-deps',
+    '视频渲染 Python 依赖',
+    renderDeps.ok ? 'ok' : 'error',
+    renderDeps.ok ? 'MoviePy 视频渲染依赖已就绪' : '缺少 MoviePy 视频渲染依赖',
+    renderDeps.ok ? undefined : '在 Artflow-core 目录运行 npm run setup:python，或手动执行 python -m pip install -r requirements-python.txt。',
+    renderDeps.ok ? undefined : renderDeps.detail
+  ));
+
+  try {
+    const aiSettings = config?.storage?.databasePath
+      ? (() => {
+          const database = new Database(config.storage!.databasePath!);
+          try {
+            database.migrate();
+            return database.getAiSettings();
+          } finally {
+            database.close();
+          }
+        })()
+      : withWorkflowDatabase((database) => database.getAiSettings());
+    if (!aiSettings || aiSettings.provider === 'local-rules') {
+      items.push(item('ai-caption', 'AI 发布文案', 'warning', '当前使用本地规则生成文案', '如需更高质量文案，在 AI 接入页配置 OpenAI/Anthropic/Ollama。'));
+    } else {
+      const needsApiKey = aiSettings.provider !== 'ollama';
+      const ready = !needsApiKey || Boolean(aiSettings.apiKey);
+      items.push(item(
+        'ai-caption',
+        'AI 发布文案',
+        ready ? 'ok' : 'error',
+        ready ? `已配置 ${aiSettings.provider} 文案生成` : `${aiSettings.provider} 缺少 API Key`,
+        ready ? undefined : '进入 AI 接入页补齐 API Key 或切换到本地规则。'
+      ));
+    }
+  } catch (error) {
     items.push(item(
       'ai-caption',
       'AI 发布文案',
-      ready ? 'ok' : 'error',
-      ready ? `已配置 ${aiSettings.provider} 文案生成` : `${aiSettings.provider} 缺少 API Key`,
-      ready ? undefined : '进入 AI 接入页补齐 API Key 或切换到本地规则。'
+      'warning',
+      '暂时无法读取 AI 发布文案配置',
+      '先修复配置文件或完成 Pixiv 登录后，再重新运行系统检查。',
+      error instanceof Error ? error.message : String(error)
     ));
   }
 

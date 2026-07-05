@@ -192,6 +192,7 @@ export function loadTokenFromStorage(databasePath?: string): string | null {
 export function clearTokenFromStorage(databasePath?: string): void {
   try {
     const tokenPath = getTokenFilePath(databasePath);
+    const backupPath = join(dirname(tokenPath), TOKEN_BACKUP_FILE_NAME);
     logger.info('Attempting to clear token from unified storage', { 
       tokenPath, 
       databasePath: databasePath || 'not provided (using default)' 
@@ -202,6 +203,11 @@ export function clearTokenFromStorage(databasePath?: string): void {
       logger.info('Token file deleted from unified storage', { tokenPath });
     } else {
       logger.info('Token file does not exist in unified storage (may have been already cleared)', { tokenPath });
+    }
+
+    if (existsSync(backupPath)) {
+      unlinkSync(backupPath);
+      logger.info('Token backup file deleted from unified storage', { backupPath });
     }
   } catch (error) {
     logger.error('Failed to clear token from unified storage', {
@@ -228,4 +234,3 @@ export function getBestAvailableToken(configToken: string | undefined | null, da
   // Fallback to unified storage
   return loadTokenFromStorage(databasePath);
 }
-

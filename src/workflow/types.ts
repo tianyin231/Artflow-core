@@ -27,6 +27,7 @@ export type WorkflowAction =
   | 'continue_assets_ai_rules'
   | 'approve_cover'
   | 'approve_video'
+  | 'resume_failed'
   | 'reject';
 
 export interface WorkflowStage {
@@ -58,6 +59,7 @@ export interface WorkflowPlan {
     totalDuration?: number;
     bgmPath?: string;
     disclaimer?: WorkflowVideoDisclaimer;
+    effectPlan?: WorkflowVideoEffectPlan;
   };
   publish: {
     platform: 'bilibili';
@@ -93,6 +95,27 @@ export interface WorkflowVideoDisclaimer {
   duration: number;
   title: string;
   lines: string[];
+}
+
+export type WorkflowVideoEffectName =
+  | 'slow_zoom'
+  | 'pan_left'
+  | 'pan_right'
+  | 'pan_up'
+  | 'pan_down'
+  | 'drift'
+  | 'sway'
+  | 'pulse';
+
+export interface WorkflowVideoEffectShot {
+  effect: WorkflowVideoEffectName;
+  zoom?: number;
+  intensity?: number;
+}
+
+export interface WorkflowVideoEffectPlan {
+  styleHint?: string;
+  shots: WorkflowVideoEffectShot[];
 }
 
 export interface WorkflowVideoOverrides {
@@ -190,6 +213,11 @@ export interface WorkflowImageAsset {
     profileImageUrls?: Record<string, string>;
   };
   tags?: Array<{ name: string; translated_name?: string }>;
+  publishedAt?: string;
+  bookmarkCount?: number;
+  viewCount?: number;
+  popularityRank?: number;
+  popularityRankScope?: string;
   fileHash?: string;
   status: 'accepted' | 'rejected';
   reason?: string;

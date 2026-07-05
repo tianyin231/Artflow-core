@@ -1,10 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { existsSync } from 'node:fs';
 import { workflowManager } from '../../workflow/WorkflowManager';
+import { workflowScheduler } from '../../workflow/WorkflowScheduler';
+import { workflowAiAgent } from '../../workflow/WorkflowAiAgent';
+import { listWorkflowBgmCandidates } from '../../workflow/WorkflowBgmLibrary';
+import { publishJobService } from '../../workflow/PublishJobService';
 import { CreateWorkflowTaskRequest } from '../../workflow/types';
 import { NotConfiguredBilibiliOpenPlatformPublisher } from '../../workflow/publishers/BilibiliOpenPlatformPublisher';
 import { defaultPresets, withWorkflowDatabase } from '../../workflow/workflow-store';
 import { AiSettingsRecord, CommandPresetRecord } from '../../storage/repositories/WorkflowRepository';
+import { loadConfig, StandaloneConfig, getConfigPath } from '../../config';
 
 const router = Router();
 
@@ -30,6 +35,49 @@ interface PublishCaptionResult {
   dynamic: string;
   articleTitle?: string;
   articleBody?: string;
+}
+
+interface AiConfigPatchRequest {
+  command?: string;
+}
+
+interface BilibiliPublishSettingsRequest {
+  clientId?: string;
+  clientSecret?: string;
+  accessToken?: string;
+  refreshToken?: string;
+}
+
+function mergeConfigPatch(config: StandaloneConfig, patch: Partial<StandaloneConfig>): StandaloneConfig {
+  return {
+    ...config,
+    scheduler: patch.scheduler ? { ...(config.scheduler ?? {}), ...patch.scheduler } : config.scheduler,
+    download: patch.download ? { ...(config.download ?? {}), ...patch.download } : config.download,
+    network: patch.network ? { ...(config.network ?? {}), ...patch.network } : config.network,
+    targets: patch.targets ?? config.targets,
+  };
+}
+
+function maskSecret(value?: string): string {
+  return value ? '***' : '';
+}
+
+function mergePublishSecret(next?: string, current?: string): string | undefined {
+  if (next === undefined) return current;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === '***') return current;
+  return trimmed;
+}
+
+function maskBilibiliPublishSettings(settings: BilibiliPublishSettingsRequest & { updatedAt?: string } = {}) {
+  return {
+    clientId: maskSecret(settings.clientId),
+    clientSecret: maskSecret(settings.clientSecret),
+    accessToken: maskSecret(settings.accessToken),
+    refreshToken: maskSecret(settings.refreshToken),
+    configured: Boolean(settings.clientId && settings.clientSecret && settings.accessToken),
+    updatedAt: settings.updatedAt,
+  };
 }
 
 function defaultBaseUrl(provider: AiProvider): string {
@@ -191,6 +239,14 @@ router.get('/tasks', (req: Request, res: Response) => {
   res.json({ data: workflowManager.listTasks() });
 });
 
+router.get('/bgm/candidates', (_req: Request, res: Response) => {
+  try {
+    res.json({ data: listWorkflowBgmCandidates() });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.get('/presets', (req: Request, res: Response) => {
   try {
     const presets = withWorkflowDatabase((database) => database.listCommandPresets());
@@ -269,7 +325,7 @@ router.put('/ai-settings', (req: Request<unknown, unknown, AiSettingsRecord>, re
       model: req.body.model || 'local-rule-planner',
       baseUrl: req.body.baseUrl || '',
       apiKey: req.body.apiKey || '',
-      planningMode: req.body.planningMode || 'rules-first',
+      planningMode: (req.body.provider || 'local-rules') === 'local-rules' ? 'rules-first' : 'ai-first',
     };
     const saved = withWorkflowDatabase((database) => database.saveAiSettings(settings));
     res.json({ data: saved });
@@ -522,6 +578,186 @@ router.post('/publish-caption', async (req: Request<unknown, unknown, PublishCap
   }
 });
 
+router.post('/ai-config-patch', async (req: Request<unknown, unknown, AiConfigPatchRequest>, res: Response) => {
+  try {
+    const command = req.body.command?.trim();
+    if (!command) {
+      res.status(400).json({ error: 'command is required' });
+      return;
+    }
+
+    const currentConfig = loadConfig(getConfigPath());
+    const result = await workflowAiAgent.generateConfigPatch({
+      command,
+      currentConfig,
+    });
+    if (!result) {
+      res.status(400).json({ error: 'OpenAI Compatible AI settings are required to generate config patch' });
+      return;
+    }
+
+    res.json({
+      data: {
+        command,
+        patch: result.patch,
+        previewConfig: mergeConfigPatch(currentConfig, result.patch),
+        notes: result.notes ?? [],
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.get('/schedules', (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    res.json({ data: workflowScheduler.listSchedules() });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/schedules', (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    const schedule = workflowScheduler.upsertSchedule({
+      name: req.body?.name,
+      enabled: req.body?.enabled,
+      cron: req.body?.cron,
+      timezone: req.body?.timezone,
+      command: req.body?.command,
+      payload: req.body?.payload,
+    });
+    res.json({ data: schedule });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.put('/schedules/:id', (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    const schedule = workflowScheduler.upsertSchedule({
+      id: req.params.id,
+      name: req.body?.name,
+      enabled: req.body?.enabled,
+      cron: req.body?.cron,
+      timezone: req.body?.timezone,
+      command: req.body?.command,
+      payload: req.body?.payload,
+    });
+    res.json({ data: schedule });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/schedules/:id/enabled', (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    const schedule = workflowScheduler.setEnabled(req.params.id, Boolean(req.body?.enabled));
+    res.json({ data: schedule });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/schedules/:id/run', async (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    const task = await workflowScheduler.triggerNow(req.params.id);
+    res.json({ data: task });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.delete('/schedules/:id', (req: Request, res: Response) => {
+  try {
+    workflowScheduler.restore();
+    const deleted = workflowScheduler.deleteSchedule(req.params.id);
+    res.json({ data: { deleted } });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.get('/publish-jobs', (req: Request, res: Response) => {
+  try {
+    res.json({ data: publishJobService.listJobs() });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.get('/publish-jobs/:id', (req: Request, res: Response) => {
+  try {
+    const job = publishJobService.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: 'Publish job not found' });
+      return;
+    }
+    res.json({ data: job });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/publish-jobs/:id/cancel', (req: Request, res: Response) => {
+  try {
+    res.json({ data: publishJobService.cancelJob(req.params.id) });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/publish-jobs/:id/submit', async (req: Request, res: Response) => {
+  try {
+    res.json({ data: await publishJobService.submitJob(req.params.id) });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.get('/publish-settings/bilibili', (req: Request, res: Response) => {
+  try {
+    const settings = withWorkflowDatabase((database) => database.getBilibiliPublishSettings());
+    res.json({ data: maskBilibiliPublishSettings(settings ?? {}) });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.put('/publish-settings/bilibili', (req: Request<unknown, unknown, BilibiliPublishSettingsRequest>, res: Response) => {
+  try {
+    const current = withWorkflowDatabase((database) => database.getBilibiliPublishSettings()) ?? {};
+    const saved = withWorkflowDatabase((database) =>
+      database.saveBilibiliPublishSettings({
+        clientId: mergePublishSecret(req.body.clientId, current.clientId),
+        clientSecret: mergePublishSecret(req.body.clientSecret, current.clientSecret),
+        accessToken: mergePublishSecret(req.body.accessToken, current.accessToken),
+        refreshToken: mergePublishSecret(req.body.refreshToken, current.refreshToken),
+      })
+    );
+    res.json({ data: maskBilibiliPublishSettings(saved) });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/publish-settings/bilibili/test', (req: Request, res: Response) => {
+  try {
+    const settings = withWorkflowDatabase((database) => database.getBilibiliPublishSettings());
+    const publisher = new NotConfiguredBilibiliOpenPlatformPublisher(settings ?? {});
+    publisher.testConnection()
+      .then((data) => res.json({ data }))
+      .catch((error) => res.status(502).json({ error: error instanceof Error ? error.message : String(error) }));
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.get('/tasks/:taskId', (req: Request, res: Response) => {
   const task = workflowManager.getTask(req.params.taskId);
   if (!task) {
@@ -640,6 +876,24 @@ router.post('/tasks/:taskId/continue-assets', (req: Request, res: Response) => {
 router.post('/tasks/:taskId/continue-cover', (req: Request, res: Response) => {
   try {
     const task = workflowManager.continueAfterCoverReview(req.params.taskId);
+    res.json({ data: task });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/tasks/:taskId/resume', (req: Request, res: Response) => {
+  try {
+    const task = workflowManager.resumeFailedTask(req.params.taskId);
+    res.json({ data: task });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.post('/tasks/:taskId/rerender-video', (req: Request, res: Response) => {
+  try {
+    const task = workflowManager.rerenderVideo(req.params.taskId, req.body?.note);
     res.json({ data: task });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });

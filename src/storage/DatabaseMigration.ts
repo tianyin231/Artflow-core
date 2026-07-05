@@ -99,6 +99,38 @@ export class DatabaseMigration {
             settings_json TEXT NOT NULL,
             updated_at DATETIME NOT NULL
           )`,
+        `CREATE TABLE IF NOT EXISTS workflow_schedules (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            cron TEXT NOT NULL,
+            timezone TEXT,
+            command TEXT NOT NULL,
+            payload_json TEXT,
+            last_task_id TEXT,
+            last_run_at DATETIME,
+            last_status TEXT,
+            last_error TEXT,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
+        `CREATE TABLE IF NOT EXISTS publish_jobs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            title TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            result_json TEXT,
+            error TEXT,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
+        `CREATE TABLE IF NOT EXISTS publish_settings (
+            platform TEXT PRIMARY KEY,
+            settings_json TEXT NOT NULL,
+            updated_at DATETIME NOT NULL
+          )`,
       ];
 
       // Create indexes for better query performance
@@ -117,6 +149,11 @@ export class DatabaseMigration {
         `CREATE INDEX IF NOT EXISTS idx_workflow_tasks_created_at ON workflow_tasks(created_at)`,
         `CREATE INDEX IF NOT EXISTS idx_command_presets_category ON command_presets(category)`,
         `CREATE INDEX IF NOT EXISTS idx_command_presets_updated_at ON command_presets(updated_at)`,
+        `CREATE INDEX IF NOT EXISTS idx_workflow_schedules_enabled ON workflow_schedules(enabled)`,
+        `CREATE INDEX IF NOT EXISTS idx_workflow_schedules_updated_at ON workflow_schedules(updated_at)`,
+        `CREATE INDEX IF NOT EXISTS idx_publish_jobs_status ON publish_jobs(status)`,
+        `CREATE INDEX IF NOT EXISTS idx_publish_jobs_task_id ON publish_jobs(task_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_publish_jobs_created_at ON publish_jobs(created_at)`,
       ];
 
       const transaction = this.db.transaction((stmts: string[]) => {
@@ -181,9 +218,6 @@ export class DatabaseMigration {
     }
   }
 }
-
-
-
 
 
 

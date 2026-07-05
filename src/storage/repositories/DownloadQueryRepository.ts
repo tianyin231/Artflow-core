@@ -38,6 +38,101 @@ export class DownloadQueryRepository extends BaseRepository {
     return !!row;
   }
 
+  public getDownloadByFilePath(filePath: string): {
+    pixivId: string;
+    type: string;
+    tag: string;
+    title: string;
+    filePath: string;
+    author: string | null;
+    userId: string | null;
+    authorAccount: string | null;
+    authorProfileImageUrls: Record<string, string> | null;
+  } | null {
+    const stmt = this.db.prepare(
+      `SELECT pixiv_id, type, tag, title, file_path, author, user_id, author_account, author_profile_image_urls
+       FROM downloads
+       WHERE file_path = ?
+       LIMIT 1`
+    );
+    const row = stmt.get(filePath) as {
+      pixiv_id: string;
+      type: string;
+      tag: string;
+      title: string;
+      file_path: string;
+      author: string | null;
+      user_id: string | null;
+      author_account: string | null;
+      author_profile_image_urls: string | null;
+    } | undefined;
+    return row ? this.mapDownloadLookupRow(row) : null;
+  }
+
+  public getDownloadByPixivId(pixivId: string): {
+    pixivId: string;
+    type: string;
+    tag: string;
+    title: string;
+    filePath: string;
+    author: string | null;
+    userId: string | null;
+    authorAccount: string | null;
+    authorProfileImageUrls: Record<string, string> | null;
+  } | null {
+    const stmt = this.db.prepare(
+      `SELECT pixiv_id, type, tag, title, file_path, author, user_id, author_account, author_profile_image_urls
+       FROM downloads
+       WHERE pixiv_id = ?
+       ORDER BY downloaded_at DESC
+       LIMIT 1`
+    );
+    const row = stmt.get(pixivId) as {
+      pixiv_id: string;
+      type: string;
+      tag: string;
+      title: string;
+      file_path: string;
+      author: string | null;
+      user_id: string | null;
+      author_account: string | null;
+      author_profile_image_urls: string | null;
+    } | undefined;
+    return row ? this.mapDownloadLookupRow(row) : null;
+  }
+
+  private mapDownloadLookupRow(row: {
+    pixiv_id: string;
+    type: string;
+    tag: string;
+    title: string;
+    file_path: string;
+    author: string | null;
+    user_id: string | null;
+    author_account: string | null;
+    author_profile_image_urls: string | null;
+  }) {
+    let authorProfileImageUrls: Record<string, string> | null = null;
+    if (row.author_profile_image_urls) {
+      try {
+        authorProfileImageUrls = JSON.parse(row.author_profile_image_urls) as Record<string, string>;
+      } catch {
+        authorProfileImageUrls = null;
+      }
+    }
+    return {
+      pixivId: row.pixiv_id,
+      type: row.type,
+      tag: row.tag,
+      title: row.title,
+      filePath: row.file_path,
+      author: row.author,
+      userId: row.user_id,
+      authorAccount: row.author_account,
+      authorProfileImageUrls,
+    };
+  }
+
   /**
    * Batch check if multiple items are already downloaded
    * Returns a Set of pixivIds that are already downloaded
@@ -371,7 +466,6 @@ export class DownloadQueryRepository extends BaseRepository {
     }>;
   }
 }
-
 
 
 

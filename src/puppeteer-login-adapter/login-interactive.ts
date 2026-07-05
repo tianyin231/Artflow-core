@@ -85,7 +85,8 @@ export async function loginWithPuppeteerInteractive(proxy?: ProxyConfig): Promis
       throw launchError;
     }
     
-    const page = await browser.newPage();
+    const pages = await browser.pages();
+    const page = pages[0] || await browser.newPage();
     
     // Set user agent to avoid detection
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -125,7 +126,7 @@ export async function loginWithPuppeteerInteractive(proxy?: ProxyConfig): Promis
         const codeFromUrl = urlObj.searchParams.get('code');
         if (codeFromUrl) {
           console.log('[+]: Found authorization code in current URL!');
-          const loginInfo = await exchangeCodeForToken(codeFromUrl, codeVerifier);
+          const loginInfo = await exchangeCodeForToken(codeFromUrl, codeVerifier, proxy);
           console.log('[+]: Login successful!');
           await browser.close();
           browser = null;
@@ -142,7 +143,7 @@ export async function loginWithPuppeteerInteractive(proxy?: ProxyConfig): Promis
     console.log('[i]: Exchanging code for access token...');
     
     // Exchange code for token
-    const loginInfo = await exchangeCodeForToken(code, codeVerifier);
+    const loginInfo = await exchangeCodeForToken(code, codeVerifier, proxy);
     
     console.log('[+]: Login successful!');
     console.log('[i]: Closing browser window...');
@@ -171,8 +172,6 @@ export async function loginWithPuppeteerInteractive(proxy?: ProxyConfig): Promis
     return null;
   }
 }
-
-
 
 
 

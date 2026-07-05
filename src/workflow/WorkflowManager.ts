@@ -28,6 +28,9 @@ import {
   WorkflowVideoOverrides,
   WorkflowVideoStyle,
 } from './types';
+import { AiWorkflowPlanPatch, workflowAiAgent } from './WorkflowAiAgent';
+import { downloadWorkflowBgmFromInternet, isSupportedWorkflowBgmPath, listWorkflowBgmCandidates } from './WorkflowBgmLibrary';
+import { publishJobService } from './PublishJobService';
 import { withWorkflowDatabase } from './workflow-store';
 
 const execFileAsync = promisify(execFile);
@@ -125,14 +128,38 @@ export class WorkflowManager {
       throw new Error(`Task ${taskId} is not waiting for review`);
     }
 
-    task.status = 'rejected';
     task.review = {
       status: 'rejected',
       note,
       reviewedAt: new Date().toISOString(),
     };
-    this.failStage(task, 'review', new Error(note || '审核驳回'));
     this.addLog(task, 'warn', `人工审核驳回${note ? `: ${note}` : ''}`);
+
+    if (task.status === 'asset_review_required') {
+      task.status = 'rejected';
+      this.failStage(task, 'filter', new Error(note || '素材审核驳回'));
+      this.touch(task);
+      return task;
+    }
+
+    if (task.status === 'cover_review_required') {
+      this.setStage(task, 'image', {
+        status: 'blocked',
+        message: '封面已驳回，请调整素材或重生成封面',
+        progress: 100,
+        error: undefined,
+      });
+      task.currentStage = 'image';
+      task.requiresUserConfirmation = true;
+      task.availableActions = ['approve_cover', 'reject'];
+      this.touch(task);
+      return task;
+    }
+
+    if (task.status === 'review_required') {
+      return this.rerenderVideo(taskId, note || '视频审核驳回，重新生成视频');
+    }
+
     this.touch(task);
     return task;
   }
@@ -195,6 +222,108 @@ export class WorkflowManager {
     task.requiresUserConfirmation = false;
     task.availableActions = [];
     this.touch(task);
+    this.renderAndPauseForReview(task, acceptedImages).catch((error) => {
+      this.failStage(task, 'render', error);
+      task.status = 'failed';
+      this.addLog(task, 'error', error instanceof Error ? error.message : String(error));
+      this.touch(task);
+    });
+    return task;
+  }
+
+  public resumeFailedTask(taskId: string): WorkflowTask {
+    const task = this.requireTask(taskId);
+    if (task.status !== 'failed') {
+      throw new Error(`Task ${taskId} is not failed`);
+    }
+
+    const failedStage = task.stages.find((stage) => stage.status === 'failed')?.id ?? task.currentStage;
+    const acceptedImages = task.assets.filter((asset) => asset.status === 'accepted');
+    if (failedStage === 'image' && acceptedImages.length === 0) {
+      throw new Error('No accepted images available for cover generation');
+    }
+    if (failedStage === 'render' && acceptedImages.length === 0) {
+      throw new Error('No accepted images available for rendering');
+    }
+    if (failedStage === 'publish' && !task.videoPath) {
+      throw new Error('No rendered video available for publish package generation');
+    }
+    if (failedStage !== 'image' && failedStage !== 'render' && failedStage !== 'publish') {
+      throw new Error(`Stage ${failedStage || 'unknown'} cannot be resumed. Please create a new workflow task.`);
+    }
+
+    task.status = 'running';
+    task.requiresUserConfirmation = false;
+    task.availableActions = [];
+    this.addLog(task, 'info', `从失败阶段继续: ${failedStage || 'unknown'}`);
+    this.touch(task);
+
+    if (failedStage === 'image') {
+      this.generateCoverAndPause(task, acceptedImages).catch((error) => {
+        this.failStage(task, 'image', error);
+        task.status = 'failed';
+        this.addLog(task, 'error', error instanceof Error ? error.message : String(error));
+        this.touch(task);
+      });
+      return task;
+    }
+
+    if (failedStage === 'render') {
+      this.renderAndPauseForReview(task, acceptedImages).catch((error) => {
+        this.failStage(task, 'render', error);
+        task.status = 'failed';
+        this.addLog(task, 'error', error instanceof Error ? error.message : String(error));
+        this.touch(task);
+      });
+      return task;
+    }
+
+    if (failedStage === 'publish') {
+      this.publishDryRun(task).catch((error) => {
+        this.failStage(task, 'publish', error);
+        task.status = 'failed';
+        this.addLog(task, 'error', error instanceof Error ? error.message : String(error));
+        this.touch(task);
+      });
+      return task;
+    }
+
+    throw new Error(`Stage ${failedStage || 'unknown'} cannot be resumed. Please create a new workflow task.`);
+  }
+
+  public rerenderVideo(taskId: string, note?: string): WorkflowTask {
+    const task = this.requireTask(taskId);
+    if (!task.plan) {
+      throw new Error('Workflow plan is missing');
+    }
+    const acceptedImages = task.assets.filter((asset) => asset.status === 'accepted');
+    if (acceptedImages.length === 0) {
+      throw new Error('No accepted images available for rendering');
+    }
+
+    task.status = 'running';
+    task.videoPath = undefined;
+    task.publish = undefined;
+    task.review = { status: 'pending' };
+    task.requiresUserConfirmation = false;
+    task.availableActions = [];
+    this.setStage(task, 'publish', {
+      status: 'pending',
+      message: '等待中',
+      progress: 0,
+      error: undefined,
+      completedAt: undefined,
+    });
+    this.setStage(task, 'review', {
+      status: 'pending',
+      message: '等待视频生成',
+      progress: 0,
+      error: undefined,
+      completedAt: undefined,
+    });
+    this.addLog(task, 'info', note || '重新生成视频');
+    this.touch(task);
+
     this.renderAndPauseForReview(task, acceptedImages).catch((error) => {
       this.failStage(task, 'render', error);
       task.status = 'failed';
@@ -300,13 +429,24 @@ export class WorkflowManager {
 
   private async runTask(task: WorkflowTask, request: CreateWorkflowTaskRequest): Promise<void> {
     this.startStage(task, 'plan', '正在解析自然语言指令');
-    const plan = this.createPlan(task.command, request.videoOverrides);
+
+    const aiPatch = await this.createAiPlanPatch(task, request);
+    const plan = this.createPlan(task.command, {
+      ...request.videoOverrides,
+      ...aiPatch?.videoOverrides,
+    });
     this.applyPixivOverrides(plan, request.pixivOverrides);
+    this.applyPixivOverrides(plan, aiPatch?.pixivOverrides);
     this.applyPublishOverrides(plan, request.publishOverrides);
+    this.applyPublishOverrides(plan, aiPatch?.publishOverrides);
+    this.applyAiPlanMetadata(plan, aiPatch);
+    this.validateConfiguredBgmPath(task, plan);
+    await this.applyAiBgmSelection(task, plan);
+
     const pixivConfig = this.createPixivConfig(task.id, plan);
     task.plan = plan;
     task.pixivConfig = this.maskPixivConfig(pixivConfig);
-    this.completeStage(task, 'plan', '已生成本地工作流计划');
+    this.completeStage(task, 'plan', aiPatch ? '已生成 AI 工作流计划' : '已生成本地工作流计划');
     this.addLog(task, 'info', `计划生成完成: ${plan.title}`);
 
     this.startStage(task, 'download', request.dryRunDownload ? '跳过远程抓取，使用本地素材' : '正在调用 PixivFlow 下载');
@@ -322,7 +462,7 @@ export class WorkflowManager {
     );
 
     this.startStage(task, 'filter', '正在筛选图片分辨率和文件完整性');
-    task.assets = await this.filterImages(images);
+    task.assets = await this.filterImages(images, pixivConfig);
     const acceptedImages = task.assets.filter((asset) => asset.status === 'accepted');
     if (acceptedImages.length === 0) {
       throw new Error('No images passed pre-filter');
@@ -339,8 +479,46 @@ export class WorkflowManager {
     task.availableActions = ['continue_assets_manual', 'continue_assets_keep_all', 'continue_assets_ai_rules', 'reject'];
     this.addLog(task, 'info', '工作流暂停在素材预审核阶段');
     this.touch(task);
-    if (request.prefilterMode && request.prefilterMode !== 'manual') {
-      this.continueAfterAssetReview(task.id, request.prefilterMode);
+    const prefilterMode = request.prefilterMode || aiPatch?.prefilterMode;
+    if (prefilterMode && prefilterMode !== 'manual') {
+      this.continueAfterAssetReview(task.id, prefilterMode);
+    }
+  }
+
+  private async createAiPlanPatch(
+    task: WorkflowTask,
+    request: CreateWorkflowTaskRequest
+  ): Promise<AiWorkflowPlanPatch | null> {
+    const aiRequired = workflowAiAgent.isAiFirstMode();
+    this.addAiLog(task, '工作流规划', '开始', '正在调用 AI 解析自然语言指令');
+    try {
+      const patch = await workflowAiAgent.planWorkflow(task.command, request);
+      if (!patch) {
+        if (aiRequired) {
+          throw new Error('AI-first 模式已启用，但 AI 未返回规划结果。请检查 AI 设置、API Key、模型或网络连接。');
+        }
+        this.addAiLog(task, '工作流规划', '跳过', '当前不是 AI-first 模式，使用本地规则规划');
+        return null;
+      }
+      this.addAiLog(task, '工作流规划', '完成', JSON.stringify({
+        title: patch.title,
+        pixivOverrides: patch.pixivOverrides,
+        videoOverrides: patch.videoOverrides,
+        publishOverrides: patch.publishOverrides,
+        prefilterMode: patch.prefilterMode,
+      }));
+      if (patch.notes?.length) {
+        this.addAiLog(task, '工作流规划说明', '完成', patch.notes.join('；'));
+      }
+      return patch;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addAiLog(task, '工作流规划', '失败', message, 'error');
+      if (aiRequired) {
+        throw new Error(`AI 工作流已停止: ${message}`);
+      }
+      this.addLog(task, 'warn', `AI Agent 规划失败，回退本地规则: ${message}`);
+      return null;
     }
   }
 
@@ -368,7 +546,9 @@ export class WorkflowManager {
 
   private async renderAndPauseForReview(task: WorkflowTask, acceptedImages: WorkflowImageAsset[]): Promise<void> {
     this.startStage(task, 'render', '正在调用 MoviePy 渲染视频');
-    task.videoPath = await this.renderVideo(task, this.rankVideoAssets(task, acceptedImages));
+    const rankedAssets = this.rankVideoAssets(task, acceptedImages);
+    await this.applyAiEffectPlan(task, rankedAssets);
+    task.videoPath = await this.renderVideo(task, rankedAssets);
     task.latestArtifact = { type: 'video', path: task.videoPath, name: basename(task.videoPath) };
     this.addProgressEvent(task, 'render', 'video', `视频生成完成: ${basename(task.videoPath)}`, {
       artifactPath: task.videoPath,
@@ -498,13 +678,13 @@ export class WorkflowManager {
       600
     );
     const fps = this.clampNumber(overrides.fps ?? 60, 12, 60);
-    const crossfade = this.clampNumber(overrides.crossfade ?? (style === 'soft' ? 0.35 : 0.18), 0, 2);
+    const crossfade = this.clampNumber(overrides.crossfade ?? (style === 'soft' ? 0.55 : 0.45), 0, 2);
     const secondsPerImage = this.clampNumber(
-      overrides.secondsPerImage ?? (totalDuration > 0 ? (totalDuration + (maxImages - 1) * crossfade) / maxImages : style === 'soft' ? 4 : 3),
+      overrides.secondsPerImage ?? (totalDuration > 0 ? (totalDuration + (maxImages - 1) * crossfade) / maxImages : style === 'soft' ? 5 : 4.5),
       0.5,
       20
     );
-    const zoom = this.clampNumber(overrides.zoom ?? (style === 'soft' ? 1.02 : 1.08), 1, 1.5);
+    const zoom = this.clampNumber(overrides.zoom ?? (style === 'soft' ? 1.015 : 1.04), 1, 1.5);
     const bgmPath = overrides.bgmPath?.trim() || this.pickBgmPath(command);
 
     return {
@@ -624,6 +804,158 @@ export class WorkflowManager {
     if (overrides.articleBody?.trim()) plan.publish.articleBody = overrides.articleBody.trim();
   }
 
+  private applyAiPlanMetadata(plan: WorkflowPlan, patch: AiWorkflowPlanPatch | null): void {
+    if (!patch) return;
+    if (patch.title?.trim()) plan.title = this.clampText(patch.title.trim(), 80);
+    if (patch.description?.trim()) plan.description = patch.description.trim();
+  }
+
+  private validateConfiguredBgmPath(task: WorkflowTask, plan: WorkflowPlan): void {
+    const bgmPath = plan.video.bgmPath?.trim();
+    if (!bgmPath) return;
+    if (!existsSync(bgmPath)) {
+      throw new Error(`指定的 BGM 文件不存在: ${bgmPath}`);
+    }
+    if (!isSupportedWorkflowBgmPath(bgmPath)) {
+      throw new Error(`指定的 BGM 格式不支持: ${bgmPath}`);
+    }
+    this.addAiLog(task, 'BGM 指定', '完成', `使用指定本地 BGM: ${bgmPath}`);
+  }
+
+  private async applyAiBgmSelection(task: WorkflowTask, plan: WorkflowPlan): Promise<void> {
+    if (plan.video.bgmPath?.trim()) return;
+    const aiRequired = workflowAiAgent.isAiFirstMode();
+    this.addAiLog(task, 'BGM 选择', '开始', '正在分析视频风格并选择背景音乐');
+    const candidates = listWorkflowBgmCandidates();
+    if (candidates.length > 0) {
+      try {
+        const selection = await workflowAiAgent.selectBgm({
+          command: task.command,
+          plan,
+          candidates,
+        });
+        if (selection?.path) {
+          plan.video.bgmPath = selection.path;
+          this.addAiLog(task, 'BGM 选择', '完成', JSON.stringify({
+            path: selection.path,
+            name: basename(selection.path),
+            reason: selection.reason,
+          }));
+          return;
+        }
+        this.addAiLog(task, 'BGM 选择', '无结果', 'AI 未从本地候选中选择 BGM，继续生成搜索词');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.addAiLog(task, 'BGM 选择', '失败', message, 'error');
+        if (aiRequired) throw new Error(`AI BGM 选择失败，流程已停止: ${message}`);
+        this.addLog(task, 'warn', `AI BGM 选择失败，尝试联网下载: ${message}`);
+      }
+    }
+
+    try {
+      const searchPlan = await this.createBgmSearchQueries(task, plan);
+      const downloaded = await downloadWorkflowBgmFromInternet({
+        query: searchPlan.queries[0],
+        queries: searchPlan.queries,
+        outputDir: resolve(process.cwd(), 'workflow_runs', task.id, 'bgm'),
+        network: loadConfig(this.workflowConfigPath).network,
+      });
+      if (!downloaded) {
+        this.addAiLog(task, 'BGM 下载', '无结果', `外部音频库未找到可下载 BGM，搜索计划: ${searchPlan.queries.join(' | ')}`, 'warn');
+        return;
+      }
+      plan.video.bgmPath = downloaded.path;
+      this.addAiLog(task, 'BGM 下载', '完成', JSON.stringify(downloaded));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addAiLog(task, 'BGM 下载', '失败', `外部音频库下载失败: ${message}`, 'warn');
+      this.addLog(task, 'warn', `自动下载 BGM 失败，继续生成无外部 BGM 视频: ${message}`);
+    }
+  }
+
+  private async createBgmSearchQueries(task: WorkflowTask, plan: WorkflowPlan): Promise<{ queries: string[] }> {
+    const aiRequired = workflowAiAgent.isAiFirstMode();
+    this.addAiLog(task, 'BGM 搜索词', '开始', '正在让 AI 生成主题音乐搜索优先级');
+    try {
+      const aiPlan = await workflowAiAgent.planBgmSearch({ command: task.command, plan });
+      const queries = Array.from(new Set([...(aiPlan?.queries ?? []), aiPlan?.query].filter(Boolean) as string[])).slice(0, 8);
+      if (queries.length) {
+        this.addAiLog(task, 'BGM 搜索词', '完成', JSON.stringify(aiPlan));
+        return { queries };
+      }
+      if (aiRequired) {
+        throw new Error('AI 未返回 BGM 搜索词');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addAiLog(task, 'BGM 搜索词', '失败', message, aiRequired ? 'error' : 'warn');
+      if (aiRequired) throw new Error(`AI BGM 搜索词生成失败: ${message}`);
+      this.addLog(task, 'warn', `AI BGM 搜索词生成失败，使用本地规则: ${message}`);
+    }
+
+    const tag = plan.pixivTarget.filterTag || plan.pixivTarget.tag || plan.title;
+    return {
+      queries: [
+        `${tag} OST`,
+        `${tag} character theme`,
+        `${tag} soundtrack`,
+        `${tag} official music`,
+        `${tag} remix`,
+        `${tag} cover`,
+      ],
+    };
+  }
+
+  private async applyAiEffectPlan(task: WorkflowTask, assets: WorkflowImageAsset[]): Promise<void> {
+    if (!task.plan || task.plan.video.effectPlan?.shots.length) return;
+    const aiRequired = workflowAiAgent.isAiFirstMode();
+    this.addAiLog(task, '镜头配方', '开始', `正在为 ${assets.length} 张素材生成视频动效配方`);
+    try {
+      const effectPlan = await workflowAiAgent.generateVideoEffectPlan({
+        command: task.command,
+        plan: task.plan,
+        assets: assets.map((asset) => ({
+          width: asset.width,
+          height: asset.height,
+          title: asset.title,
+          tags: asset.tags?.map((tag) => tag.translated_name || tag.name).filter(Boolean),
+        })),
+      });
+      if (!effectPlan) {
+        if (aiRequired) {
+          throw new Error('AI 未返回视频镜头配方');
+        }
+        task.plan.video.effectPlan = this.createFallbackEffectPlan(assets);
+        this.addAiLog(task, '镜头配方', '无结果', 'AI 未返回配方，使用本地动效轮换', 'warn');
+        return;
+      }
+      task.plan.video.effectPlan = effectPlan;
+      this.addAiLog(task, '镜头配方', '完成', JSON.stringify({
+        styleHint: effectPlan.styleHint,
+        shotCount: effectPlan.shots.length,
+        shots: effectPlan.shots,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addAiLog(task, '镜头配方', '失败', message, aiRequired ? 'error' : 'warn');
+      if (aiRequired) throw new Error(`AI 镜头配方生成失败，流程已停止: ${message}`);
+      task.plan.video.effectPlan = this.createFallbackEffectPlan(assets);
+      this.addLog(task, 'warn', `AI 镜头配方生成失败，使用本地动效轮换: ${message}`);
+    }
+  }
+
+  private createFallbackEffectPlan(assets: WorkflowImageAsset[]) {
+    const effects = ['slow_zoom', 'pan_left', 'pan_right', 'drift', 'sway', 'pulse', 'pan_up', 'pan_down'] as const;
+    return {
+      styleHint: 'local fallback',
+      shots: assets.slice(0, 80).map((_, index) => ({
+        effect: effects[index % effects.length],
+        zoom: index % 3 === 0 ? 1.08 : 1.045,
+        intensity: 0.65,
+      })),
+    };
+  }
+
   private maskPixivConfig(config: StandaloneConfig): Partial<StandaloneConfig> {
     return {
       ...config,
@@ -634,15 +966,19 @@ export class WorkflowManager {
     };
   }
 
-  private async filterImages(paths: string[]): Promise<WorkflowImageAsset[]> {
+  private async filterImages(paths: string[], workflowConfig: StandaloneConfig): Promise<WorkflowImageAsset[]> {
     const assets: WorkflowImageAsset[] = [];
-    const fileService = this.createWorkflowFileService();
+    const target = workflowConfig.targets?.[0];
+    const popularityRankScope = [
+      target?.tag || target?.filterTag,
+      target?.startDate || target?.endDate ? `${target.startDate ?? '不限'} 至 ${target.endDate ?? '不限'}` : undefined,
+    ].filter(Boolean).join(' · ');
     for (const path of paths) {
       try {
         const stats = statSync(path);
         const metadata = await this.identifyImage(path);
-        const pixivMetadata = await fileService.readMetadata(path);
         const fileHash = await this.calculateFileHash(path);
+        const pixivMetadata = await this.readPixivMetadata(path, workflowConfig);
         const tooSmall = metadata.width < 640 || metadata.height < 640;
         const tooTiny = stats.size < 20 * 1024;
         assets.push({
@@ -663,6 +999,10 @@ export class WorkflowManager {
               }
             : undefined,
           tags: pixivMetadata?.tags,
+          publishedAt: pixivMetadata?.create_date || undefined,
+          bookmarkCount: pixivMetadata?.total_bookmarks ?? pixivMetadata?.bookmark_count,
+          viewCount: pixivMetadata?.total_view ?? pixivMetadata?.view_count,
+          popularityRankScope: popularityRankScope || undefined,
           fileHash,
           status: tooSmall || tooTiny ? 'rejected' : 'accepted',
           reason: tooSmall ? '分辨率过低' : tooTiny ? '文件过小' : undefined,
@@ -679,12 +1019,69 @@ export class WorkflowManager {
         });
       }
     }
+    this.applyPopularityRanks(assets);
     return assets;
+  }
+
+  private applyPopularityRanks(assets: WorkflowImageAsset[]): void {
+    const ranked = assets
+      .filter((asset) => asset.bookmarkCount !== undefined)
+      .sort((a, b) => (b.bookmarkCount ?? 0) - (a.bookmarkCount ?? 0));
+    for (let index = 0; index < ranked.length; index += 1) {
+      ranked[index].popularityRank = index + 1;
+    }
   }
 
   private createWorkflowFileService(): FileService {
     const config = loadConfig(this.workflowConfigPath);
     return new FileService(config.storage ?? {});
+  }
+
+  private async readPixivMetadata(path: string, workflowConfig: StandaloneConfig): Promise<PixivMetadata | null> {
+    const workflowMetadata = await new FileService(workflowConfig.storage ?? {}).readMetadata(path);
+    if (workflowMetadata) return workflowMetadata;
+
+    const globalConfig = loadConfig(this.workflowConfigPath);
+    const globalMetadata = await new FileService(globalConfig.storage ?? {}).readMetadata(path);
+    if (globalMetadata) return globalMetadata;
+
+    const pixivId = this.extractPixivIdFromPath(path);
+    const record = this.findDownloadRecord(path, pixivId);
+    if (!record) return null;
+    return {
+      pixiv_id: record.pixivId,
+      title: record.title,
+      author: {
+        id: record.userId ?? '',
+        name: record.author ?? '未知作者',
+        account: record.authorAccount ?? undefined,
+        profile_image_urls: record.authorProfileImageUrls ?? undefined,
+      },
+      tags: [],
+      original_url: `https://www.pixiv.net/artworks/${record.pixivId}`,
+      create_date: '',
+      download_tag: record.tag,
+      type: record.type === 'novel' ? 'novel' : 'illustration',
+    };
+  }
+
+  private findDownloadRecord(path: string, pixivId?: string) {
+    let database: Database | undefined;
+    try {
+      const config = loadConfig(this.workflowConfigPath);
+      if (!config.storage?.databasePath) return null;
+      database = new Database(config.storage.databasePath);
+      database.migrate();
+      return database.getDownloadByFilePath(path) ?? (pixivId ? database.getDownloadByPixivId(pixivId) : null);
+    } catch {
+      return null;
+    } finally {
+      database?.close();
+    }
+  }
+
+  private extractPixivIdFromPath(path: string): string | undefined {
+    return basename(path).match(/^(\d+)/)?.[1];
   }
 
   private async calculateFileHash(path: string): Promise<string> {
@@ -773,19 +1170,6 @@ export class WorkflowManager {
         '    boxes = [(0, 0, cell_w, cell_h), (cell_w, 0, width - cell_w, cell_h), (0, cell_h, cell_w, height - cell_h), (cell_w, cell_h, width - cell_w, height - cell_h)]',
         '    for src, box in zip(sources[:4], boxes):',
         '        paste_box(src, box)',
-        'overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))',
-        'shade = Image.new("RGBA", (width, round(height * 0.34)), (0, 0, 0, 132))',
-        'overlay.alpha_composite(shade, (0, height - shade.height))',
-        'canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)',
-        'draw = ImageDraw.Draw(canvas)',
-        'font_size = max(36, width // 18)',
-        'try:',
-        '    font = ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", font_size)',
-        'except Exception:',
-        '    font = ImageFont.load_default()',
-        'margin = max(32, width // 24)',
-        'text = title[:32]',
-        'draw.text((margin, height - margin - font_size * 1.35), text, fill=(255, 255, 255, 245), font=font)',
         'canvas.convert("RGB").save(dst, quality=92)',
       ].join('\n'),
       coverPath,
@@ -850,6 +1234,7 @@ export class WorkflowManager {
           motion: task.plan.video.motion,
           bgmPath: task.plan.video.bgmPath,
           disclaimer: task.plan.video.disclaimer,
+          effectPlan: task.plan.video.effectPlan,
           imageCredits: assets.map((asset) => ({
             path: asset.path,
             pixivId: asset.pixivId,
@@ -874,6 +1259,14 @@ export class WorkflowManager {
 
       child.stdout.on('data', (data: Buffer) => {
         const text = data.toString();
+        const progressMatch = text.match(/Render progress:\s*(\d+)%/i);
+        if (progressMatch) {
+          const progress = Math.min(95, Math.max(5, Number(progressMatch[1]) || 5));
+          this.setStage(task, 'render', {
+            progress,
+            message: `视频合成中: ${progressMatch[1]}%`,
+          });
+        }
         this.addLog(task, 'info', text.trim());
       });
       child.stderr.on('data', (data: Buffer) => {
@@ -895,6 +1288,7 @@ export class WorkflowManager {
 
   private async publishDryRun(task: WorkflowTask): Promise<void> {
     this.startStage(task, 'publish', '生成 B站发布包');
+    await this.applyAiPublishAssets(task);
     const publishPackage = this.createBilibiliPublishPackage(task);
     task.publish = {
       status: 'dry_run_completed',
@@ -919,7 +1313,40 @@ export class WorkflowManager {
     task.status = 'published';
     this.completeStage(task, 'publish', 'B站发布包生成完成');
     this.addLog(task, 'info', `B站发布包已生成: ${publishPackage.packagePath}`);
+    const publishJob = publishJobService.createFromPackage(task.id, publishPackage);
+    this.addLog(task, 'info', `发布任务已创建: ${publishJob.id}`);
     this.touch(task);
+  }
+
+  private async applyAiPublishAssets(task: WorkflowTask): Promise<void> {
+    if (!task.plan) return;
+    const aiRequired = workflowAiAgent.isAiFirstMode();
+    this.addAiLog(task, '发布素材', '开始', '正在根据实际素材生成 B站标题、简介、动态和专栏内容');
+    try {
+      const publishOverrides = await workflowAiAgent.generatePublishAssets({
+        command: task.command,
+        plan: task.plan,
+        sources: this.buildBilibiliPublishSources(task),
+      });
+      if (!publishOverrides) {
+        if (aiRequired) throw new Error('AI 未返回发布素材');
+        this.addAiLog(task, '发布素材', '无结果', 'AI 未返回发布素材，使用本地发布模板', 'warn');
+        return;
+      }
+      this.applyPublishOverrides(task.plan, publishOverrides);
+      this.addAiLog(task, '发布素材', '完成', JSON.stringify({
+        title: publishOverrides.title,
+        tags: publishOverrides.tags,
+        category: publishOverrides.category,
+        dynamic: publishOverrides.dynamic,
+        syncArticle: publishOverrides.syncArticle,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addAiLog(task, '发布素材', '失败', message, aiRequired ? 'error' : 'warn');
+      if (aiRequired) throw new Error(`AI 发布素材生成失败，流程已停止: ${message}`);
+      this.addLog(task, 'warn', `AI 发布素材生成失败，使用本地发布模板: ${message}`);
+    }
   }
 
   private createBilibiliPublishPackage(task: WorkflowTask): BilibiliPublishPackage {
@@ -953,16 +1380,7 @@ export class WorkflowManager {
       throw new Error('Missing workflow plan for Bilibili publish preview');
     }
 
-    const acceptedAssets = task.assets.filter((asset) => asset.status === 'accepted');
-    const sources = acceptedAssets
-      .filter((asset) => asset.pixivId || asset.author?.name)
-      .map((asset) => ({
-        pixivId: asset.pixivId,
-        title: asset.title,
-        authorName: asset.author?.name,
-        authorId: asset.author?.id,
-        url: asset.pixivId ? `https://www.pixiv.net/artworks/${asset.pixivId}` : undefined,
-      }));
+    const sources = this.buildBilibiliPublishSources(task);
     const title = this.clampText(task.plan.publish.title || task.plan.title || `${task.plan.pixivTarget.tag ?? 'Pixiv'} 插画整理`, 80);
     const tags = Array.from(new Set(task.plan.publish.tags.filter(Boolean))).slice(0, 10);
     const description = task.plan.publish.description?.trim() || this.buildBilibiliDescription(task, sources);
@@ -993,6 +1411,19 @@ export class WorkflowManager {
         : undefined,
       sources,
     };
+  }
+
+  private buildBilibiliPublishSources(task: WorkflowTask): BilibiliPublishSource[] {
+    return task.assets
+      .filter((asset) => asset.status === 'accepted')
+      .filter((asset) => asset.pixivId || asset.author?.name)
+      .map((asset) => ({
+        pixivId: asset.pixivId,
+        title: asset.title,
+        authorName: asset.author?.name,
+        authorId: asset.author?.id,
+        url: asset.pixivId ? `https://www.pixiv.net/artworks/${asset.pixivId}` : undefined,
+      }));
   }
 
   private buildBilibiliDescription(
@@ -1145,6 +1576,16 @@ export class WorkflowManager {
     this.touch(task);
   }
 
+  private addAiLog(
+    task: WorkflowTask,
+    step: string,
+    status: string,
+    detail: string,
+    level: 'info' | 'warn' | 'error' = 'info'
+  ): void {
+    this.addLog(task, level, `AI｜${step}｜${status}｜${detail}`);
+  }
+
   private addProgressEvent(
     task: WorkflowTask,
     stage: WorkflowStageId,
@@ -1202,6 +1643,9 @@ export class WorkflowManager {
     } else if (task.status === 'running') {
       task.currentStage = this.getActiveStageId(task) ?? task.currentStage;
       task.availableActions = [];
+      task.requiresUserConfirmation = false;
+    } else if (task.status === 'failed') {
+      task.availableActions = ['resume_failed'];
       task.requiresUserConfirmation = false;
     }
   }

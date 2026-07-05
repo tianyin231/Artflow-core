@@ -33,6 +33,14 @@ export class DownloadRepository extends BaseRepository {
     return this.queryRepo.isDownloaded(pixivId, type, filePath);
   }
 
+  public getDownloadByFilePath(filePath: string) {
+    return this.queryRepo.getDownloadByFilePath(filePath);
+  }
+
+  public getDownloadByPixivId(pixivId: string) {
+    return this.queryRepo.getDownloadByPixivId(pixivId);
+  }
+
   public getDownloadedIds(pixivIds: string[], type: 'illustration' | 'novel'): Set<string> {
     return this.queryRepo.getDownloadedIds(pixivIds, type);
   }

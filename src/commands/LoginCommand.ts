@@ -8,7 +8,7 @@ import { CommandCategory } from './metadata';
 import { CommandContext, CommandArgs, CommandResult } from './types';
 import { TerminalLogin, LoginInfo } from '../terminal-login';
 import { updateConfigWithToken } from '../utils/login-helper';
-import { getConfigPath } from '../config';
+import { getConfigPath, loadConfig } from '../config';
 
 /**
  * Output login result
@@ -49,8 +49,25 @@ export class LoginCommand extends BaseCommand {
     let username = (args.options.username || args.options.u) as string | undefined;
     let password = (args.options.password || args.options.p) as string | undefined;
     const configPath = (args.options.config as string) || context.configPath;
+    const finalConfigPath = configPath || getConfigPath();
 
     try {
+      let proxyConfig;
+      try {
+        const config = loadConfig(finalConfigPath, true);
+        if (config.network?.proxy?.enabled) {
+          proxyConfig = {
+            ...config.network.proxy,
+            protocol: config.network.proxy.protocol || 'http',
+          };
+          if (!json) {
+            console.log(`[i]: Using proxy from config: ${proxyConfig.protocol}://${proxyConfig.host}:${proxyConfig.port}`);
+          }
+        }
+      } catch (error) {
+        context.logger.debug('Could not load config for proxy settings, proceeding without proxy', { error });
+      }
+
       // Check if credentials were provided via command line arguments
       const credentialsProvided = !!(username && password);
       
@@ -70,18 +87,19 @@ export class LoginCommand extends BaseCommand {
         headless: useHeadless,
         username: useHeadless ? username : undefined,
         password: useHeadless ? password : undefined,
+        proxy: proxyConfig,
       });
 
       const loginInfo = await login.login({
         headless: useHeadless,
         username: useHeadless ? username : undefined,
         password: useHeadless ? password : undefined,
+        proxy: proxyConfig,
+        forcePython: !!proxyConfig?.enabled,
       });
 
       // Try to update config file with refresh token
       // Use getConfigPath to ensure we use the same config path resolution logic
-      const finalConfigPath = configPath || getConfigPath();
-      
       try {
         await updateConfigWithToken(finalConfigPath, loginInfo.refresh_token);
         if (!json) {
@@ -117,11 +135,6 @@ Examples:
   pixivflow login -u user@example.com -p password  # Headless login`;
   }
 }
-
-
-
-
-
 
 
 

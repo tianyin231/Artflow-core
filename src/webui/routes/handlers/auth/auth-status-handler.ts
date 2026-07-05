@@ -19,35 +19,21 @@ export async function getAuthStatus(req: Request, res: Response): Promise<void> 
     const refreshToken = config.pixiv?.refreshToken;
     const hasToken = !!refreshToken && !isPlaceholderToken(refreshToken);
     
-    // Validate token if it exists
-    let authenticated = false;
-    let tokenValid = false;
-    let user = null;
-    
-    if (hasToken && refreshToken) {
-      const validation = await validateToken(refreshToken);
-      tokenValid = validation.valid;
-      authenticated = validation.valid; // Only authenticated if token is valid
-      user = validation.user;
-      
-      if (tokenValid) {
-        logger.debug('Token validation successful', { hasUser: !!user });
-      } else {
-        logger.debug('Token validation failed - user is not authenticated', { hasToken });
-      }
-    } else {
+    const authenticated = hasToken;
+
+    if (!hasToken) {
       logger.debug('No valid token found - user is not authenticated', { hasToken, configPath });
     }
 
-    logger.debug('Auth status check', { authenticated, hasToken, tokenValid, configPath });
+    logger.debug('Auth status check', { authenticated, hasToken, configPath });
 
     res.json({
       data: {
         authenticated,
         hasToken,
-        tokenValid,
+        tokenValid: hasToken ? null : false,
         isAuthenticated: authenticated, // Alias for compatibility
-        user,
+        user: null,
       },
     });
   } catch (error) {
@@ -73,47 +59,25 @@ export async function getAuthStatus(req: Request, res: Response): Promise<void> 
       
       const hasToken = !isPlaceholderToken(configToken);
       
-      // Validate token if it exists
-      let authenticated = false;
-      let tokenValid = false;
-      let user = null;
-      
-      if (hasToken && configToken) {
-        const validation = await validateToken(configToken);
-        tokenValid = validation.valid;
-        authenticated = validation.valid;
-        user = validation.user;
-        
-        if (tokenValid) {
-          logger.debug('Token validation successful (from raw config)', { hasUser: !!user });
-        }
-      }
-      
-      const isTokenError = validationErrors.some(e => e.includes('refreshToken'));
-
-      // Final authentication status: must have valid token to be authenticated
-      // If token validation failed (tokenValid === false), user is NOT authenticated
-      // Also force false if there's a token-related error in config validation
-      const finalAuthenticated = (tokenValid && authenticated) && !isTokenError;
+      const finalAuthenticated = hasToken;
 
       logger.warn('Configuration invalid when checking auth status', {
         errors: validationErrors,
         warnings: validationWarnings,
         hasToken,
         authenticated: finalAuthenticated,
-        tokenValid,
       });
       
       res.json({
         data: {
           authenticated: finalAuthenticated,
           hasToken,
-          tokenValid,
+          tokenValid: hasToken ? null : false,
           isAuthenticated: finalAuthenticated, // Alias for compatibility
           configReady: false, // Config is not fully ready (validation failed)
           errors: validationErrors,
           warnings: validationWarnings,
-          user,
+          user: null,
         },
       });
       return;
@@ -122,4 +86,3 @@ export async function getAuthStatus(req: Request, res: Response): Promise<void> 
     res.status(500).json({ errorCode: ErrorCode.AUTH_STATUS_FAILED });
   }
 }
-

@@ -13,9 +13,10 @@ import { readConfigRaw } from './auth-utils';
  */
 export async function refreshToken(req: Request, res: Response): Promise<void> {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken, proxy } = req.body;
 
     let tokenToUse: string | undefined = refreshToken;
+    let proxyConfig = proxy;
 
     if (!tokenToUse) {
       // Try to get from config
@@ -40,6 +41,9 @@ export async function refreshToken(req: Request, res: Response): Promise<void> {
       
       if (!tokenToUse) {
         tokenToUse = config?.pixiv?.refreshToken;
+      }
+      if (!proxyConfig && config?.network?.proxy?.enabled) {
+        proxyConfig = config.network.proxy;
       }
 
       // Check if token is placeholder
@@ -68,7 +72,7 @@ export async function refreshToken(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const loginInfo = await TerminalLogin.refresh(tokenToUse);
+    const loginInfo = await TerminalLogin.refresh(tokenToUse, proxyConfig);
     
     // Auto-update config file with new refresh token if it changed
     if (loginInfo.refresh_token && loginInfo.refresh_token !== tokenToUse) {
@@ -114,4 +118,3 @@ export async function refreshToken(req: Request, res: Response): Promise<void> {
     });
   }
 }
-

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { ProxyAgent } from 'undici';
 
 import { NetworkConfig, PixivCredentialConfig } from '../config';
 import { logger } from '../logger';
@@ -25,6 +26,7 @@ const REFRESH_TOKEN_CACHE_KEY = 'pixiv_refresh_token';
 
 export class PixivAuth {
   private configPath?: string;
+  private readonly proxyAgent?: ProxyAgent;
 
   constructor(
     private readonly credentials: PixivCredentialConfig,
@@ -33,6 +35,7 @@ export class PixivAuth {
     configPath?: string
   ) {
     this.configPath = configPath;
+    this.proxyAgent = this.createProxyAgent();
   }
 
   public async getAccessToken(): Promise<string> {
@@ -70,12 +73,17 @@ export class PixivAuth {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), this.network.timeoutMs);
         try {
-          const response = await fetch(url, {
+          const fetchOptions: RequestInit = {
             method: 'POST',
             body,
             headers,
             signal: controller.signal,
-          });
+          };
+          if (this.proxyAgent) {
+            (fetchOptions as any).dispatcher = this.proxyAgent;
+          }
+
+          const response = await fetch(url, fetchOptions);
 
           if (!response.ok) {
             // Check for authentication errors (401, 403) which indicate refresh token is invalid/expired
@@ -155,7 +163,7 @@ export class PixivAuth {
         if (error instanceof AuthenticationError) {
           throw error;
         }
-        logger.warn('Refresh token attempt failed', { attempt: attempt + 1, error: `${error}` });
+        logger.warn('Refresh token attempt failed', this.formatRefreshError(attempt + 1, error));
         await delay(Math.min(1000 * (attempt + 1), 5000));
       }
     }
@@ -172,5 +180,41 @@ export class PixivAuth {
     const salt = '28c1fdd170a5204386cb1313c7077b32';
     return createHash('md5').update(time + salt).digest('hex');
   }
-}
 
+  private createProxyAgent(): ProxyAgent | undefined {
+    const proxy = this.network.proxy;
+    if (!proxy?.enabled || !proxy.host || !proxy.port) {
+      return undefined;
+    }
+
+    const protocol = (proxy.protocol || 'http').toLowerCase();
+    if (protocol !== 'http' && protocol !== 'https') {
+      logger.warn('Pixiv token refresh proxy only supports HTTP/HTTPS proxy', {
+        protocol,
+        host: proxy.host,
+        port: proxy.port,
+      });
+      return undefined;
+    }
+
+    const auth = proxy.username && proxy.password ? `${proxy.username}:${proxy.password}@` : '';
+    return new ProxyAgent(`${protocol}://${auth}${proxy.host}:${proxy.port}`);
+  }
+
+  private formatRefreshError(attempt: number, error: unknown): Record<string, unknown> {
+    const errorInfo: Record<string, unknown> = { attempt };
+    if (error instanceof Error) {
+      errorInfo.error = error.message;
+      errorInfo.errorType = error.name;
+      errorInfo.errorCode = (error as any).code;
+      if (error.cause instanceof Error) {
+        errorInfo.cause = error.cause.message;
+        errorInfo.causeType = error.cause.name;
+        errorInfo.causeCode = (error.cause as any).code;
+      }
+    } else {
+      errorInfo.error = String(error);
+    }
+    return errorInfo;
+  }
+}

@@ -34,6 +34,7 @@
     "analyze:complexity": "node scripts/analyze-complexity.js",
     "analyze:unused": "npx ts-prune",
     "analyze:quality": "npm run analyze:complexity && npm run analyze:unused",
+    "setup:python": "python -m pip install -r requirements-python.txt || python3 -m pip install -r requirements-python.txt",
     "setup": "npm run build && node dist/setup-wizard.js",
     "random": "npm run build && node dist/index.js random",
     "clean": "rm -rf dist",

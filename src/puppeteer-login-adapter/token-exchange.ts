@@ -3,14 +3,29 @@
  */
 
 import axios from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { LoginInfo } from '../terminal-login';
 import { AUTH_TOKEN_URL, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, USER_AGENT } from './constants';
+import { ProxyConfig, buildProxyUrl } from './proxy';
 
 /**
  * Exchange authorization code for access token
  */
-export async function exchangeCodeForToken(code: string, codeVerifier: string): Promise<LoginInfo> {
+export async function exchangeCodeForToken(
+  code: string,
+  codeVerifier: string,
+  proxy?: ProxyConfig
+): Promise<LoginInfo> {
   try {
+    const enabledProxy = proxy?.enabled ? proxy : undefined;
+    const proxyUrl = enabledProxy ? buildProxyUrl(enabledProxy) : undefined;
+    const agent = proxyUrl
+      ? enabledProxy?.protocol === 'socks4' || enabledProxy?.protocol === 'socks5'
+        ? new SocksProxyAgent(proxyUrl)
+        : new HttpsProxyAgent(proxyUrl)
+      : undefined;
+
     const response = await axios.post(
       AUTH_TOKEN_URL,
       new URLSearchParams({
@@ -29,6 +44,7 @@ export async function exchangeCodeForToken(code: string, codeVerifier: string): 
           'app-os': 'ios',
           'content-type': 'application/x-www-form-urlencoded',
         },
+        ...(agent ? { httpAgent: agent, httpsAgent: agent, proxy: false as const } : {}),
         timeout: 30000,
       }
     );
@@ -46,13 +62,37 @@ export async function exchangeCodeForToken(code: string, codeVerifier: string): 
     };
   } catch (error) {
     if (axios.isAxiosError(error) && error.response) {
-      throw new Error(`Failed to exchange code for token: ${error.response.status} ${error.response.statusText}`);
+      const responseData = typeof error.response.data === 'string'
+        ? error.response.data
+        : JSON.stringify(error.response.data);
+      throw new Error(
+        `Failed to exchange code for token: ${error.response.status} ${error.response.statusText}` +
+        (responseData ? ` - ${responseData}` : '')
+      );
     }
-    throw new Error(`Failed to exchange code for token: ${error}`);
+    throw new Error(`Failed to exchange code for token: ${formatTokenExchangeError(error)}`);
   }
 }
 
+function formatTokenExchangeError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const messages = error.errors
+      .map((item) => item instanceof Error ? `${item.message}${getErrorCode(item)}` : String(item))
+      .join('; ');
+    return `${error.message}${messages ? ` (${messages})` : ''}`;
+  }
 
+  if (error instanceof Error) {
+    return `${error.message}${getErrorCode(error)}`;
+  }
+
+  return String(error);
+}
+
+function getErrorCode(error: Error): string {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? ` [${code}]` : '';
+}
 
 
 

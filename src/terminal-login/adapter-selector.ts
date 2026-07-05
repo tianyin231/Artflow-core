@@ -116,11 +116,22 @@ export async function loginWithAdapter(options: LoginOptions): Promise<LoginInfo
           console.log('[+]: Login successful with Puppeteer!');
           return result;
         }
+        if (options.forcePuppeteer) {
+          throw new PixivLoginFailedError('Puppeteer login failed. No fallback allowed for this login request.');
+        }
       } catch (error) {
         console.error('[!]: Puppeteer login failed:', error);
+        if (options.forcePuppeteer) {
+          throw error;
+        }
         console.log('[i]: Falling back to Python gppt...');
       }
     } else {
+      if (options.forcePuppeteer) {
+        throw new PixivLoginFailedError(
+          'Puppeteer is not available. Please ensure Puppeteer is installed.'
+        );
+      }
       console.log('[i]: Puppeteer not available, will try Python gppt...');
     }
   }
@@ -170,7 +181,6 @@ export async function loginWithAdapter(options: LoginOptions): Promise<LoginInfo
     throw new Error(errorMsg);
   }
 }
-
 
 
 

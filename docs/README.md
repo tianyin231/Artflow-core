@@ -1,6 +1,8 @@
-# PixivFlow 文档
+# Artflow-core 文档
 
-PixivFlow 是一个独立运行的 Pixiv 自动化下载工具。无需浏览器插件，配置一次即可长期自动运行。
+Artflow-core 是 Artflow 的后端服务，负责 Pixiv 素材抓取、AI 工作流、视频生成、发布包生成和 Web API。
+
+当前目录中保留了部分上游文档，主要用于查询 CLI、配置、登录、Docker 和 API 细节。上传仓库时，以根目录 README 中的 Artflow 部署说明为准。
 
 ## 核心文档
 
@@ -23,37 +25,44 @@ PixivFlow 是一个独立运行的 Pixiv 自动化下载工具。无需浏览器
 
 ### 安装
 
-推荐使用 npm 全局安装：
+从源码部署：
 
 ```bash
-npm install -g pixivflow
+git clone https://github.com/tianyin231/Artflow-core.git
+cd Artflow-core
+npm install
+npm run setup:python
+npm run build
 ```
 
 ### 运行
 
-1. **登录**
+1. **启动 Web API**
    ```bash
-   pixivflow login
+   npm run webui
    ```
 
-2. **下载**
+2. **登录或命令行下载**
    ```bash
-   pixivflow download
+   npm run login
+   npm run download
    ```
 
-详细流程请参考 [快速开始](./QUICKSTART.md)。
+当前兼容 CLI 命令名仍为 `pixivflow`，旧文档中的命令可以按兼容命令理解。
 
 ---
 
 ## 功能特性
 
-- **独立运行**: 纯命令行工具，无需浏览器。
-- **自动化**: 支持 Cron 定时任务。
+- **独立运行**: 后端可独立运行，也可配合 Artflow-studio 使用。
+- **自动化**: 支持定时任务和工作流计划。
+- **AI 工作流**: 支持 AI 规划、BGM 选择、镜头配方和发布文案生成。
+- **视频生成**: 支持封面确认、视频合成、来源角标和本地 BGM。
 - **高性能**: 异步并发下载，自动处理限流。
 - **多模式**: 支持搜索、排行榜、画师全集、小说系列等。
 - **API 支持**: 提供 RESTful API 和 WebSocket，方便二次开发。
 
 ## 帮助与支持
 
-- [GitHub Issues](https://github.com/zoidberg-xgd/pixivflow/issues)
-- [GitHub Discussions](https://github.com/zoidberg-xgd/pixivflow/discussions)
+- 当前仓库 Issues
+- 当前仓库 Discussions
