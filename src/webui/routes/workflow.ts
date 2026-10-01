@@ -893,7 +893,7 @@ router.post('/tasks/:taskId/resume', (req: Request, res: Response) => {
 
 router.post('/tasks/:taskId/rerender-video', (req: Request, res: Response) => {
   try {
-    const task = workflowManager.rerenderVideo(req.params.taskId, req.body?.note);
+    const task = workflowManager.rerenderVideo(req.params.taskId, req.body?.note, req.body?.options);
     res.json({ data: task });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });

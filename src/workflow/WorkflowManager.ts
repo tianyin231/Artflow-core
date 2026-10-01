@@ -293,7 +293,15 @@ export class WorkflowManager {
     throw new Error(`Stage ${failedStage || 'unknown'} cannot be resumed. Please create a new workflow task.`);
   }
 
-  public rerenderVideo(taskId: string, note?: string): WorkflowTask {
+  public rerenderVideo(
+    taskId: string,
+    note?: string,
+    options?: {
+      transition?: string;
+      coverTemplate?: string;
+      subtitles?: 'none' | 'srt' | 'ass';
+    }
+  ): WorkflowTask {
     const task = this.requireTask(taskId);
     if (!task.plan) {
       throw new Error('Workflow plan is missing');
@@ -323,7 +331,20 @@ export class WorkflowManager {
       error: undefined,
       completedAt: undefined,
     });
+    if (options && task.plan) {
+      const v = task.plan.video as Record<string, unknown>;
+      if (options.transition) v.transition = options.transition;
+      if (options.coverTemplate) v.coverTemplate = options.coverTemplate;
+      if (options.subtitles) v.subtitles = options.subtitles;
+    }
     this.addLog(task, 'info', note || '重新生成视频');
+    if (options) {
+      this.addLog(
+        task,
+        'info',
+        `渲染选项: 转场=${options.transition ?? '默认'} 封面=${options.coverTemplate ?? '默认'} 字幕=${options.subtitles ?? 'none'}`
+      );
+    }
     this.touch(task);
 
     this.renderAndPauseForReview(task, acceptedImages).catch((error) => {
