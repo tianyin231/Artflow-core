@@ -83,7 +83,8 @@
     "lint": "eslint \"src/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "lint:strict": "eslint \"src/**/*.ts\" --max-warnings 0",
-    "test:slow": "jest --runInBand --testMatch \"**/*slow.ts\" --testTimeout 180000"
+    "test:slow": "jest --runInBand --testMatch \"**/*slow.ts\" --testTimeout 180000",
+    "test:fixture": "ARTFLOW_FIXTURE_MODE=1 jest src/__tests__/pixiv-provider src/__tests__/renderer"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

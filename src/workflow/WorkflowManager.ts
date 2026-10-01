@@ -574,6 +574,45 @@ export class WorkflowManager {
 
   private async downloadOrFallback(task: WorkflowTask, config: StandaloneConfig): Promise<string[]> {
     const before = new Set(this.collectLocalImages(config.storage!.illustrationDirectory!, 200));
+
+    // Provider path (fixture / pixiv-cli). Legacy DownloadManager kept for provider=legacy.
+    const providerKind =
+      (process.env.ARTFLOW_PIXIV_PROVIDER as string) ||
+      config.pixiv?.provider ||
+      (process.env.ARTFLOW_FIXTURE_MODE === '1' ? 'fixture' : 'legacy');
+
+    if (providerKind === 'fixture' || providerKind === 'pixiv-cli') {
+      const { createPixivProvider } = await import('../pixiv-provider/createPixivProvider');
+      const provider = createPixivProvider({
+        provider: providerKind as 'fixture' | 'pixiv-cli',
+        cliPath: config.pixiv?.cliPath,
+        cliHome: config.pixiv?.cliHome,
+      });
+      const target = config.targets?.[0];
+      const works: string[] = [];
+      for await (const w of provider.query({
+        kind: target?.mode === 'ranking' ? 'ranking' : 'search',
+        word: target?.tag || target?.filterTag,
+        limit: target?.limit ?? 10,
+        minBookmarks: target?.minBookmarks,
+        startDate: target?.startDate,
+        endDate: target?.endDate,
+      })) {
+        works.push(w.id);
+      }
+      const dest = config.storage!.illustrationDirectory!;
+      await provider.download(works, dest);
+      await provider.dispose?.();
+      const after = this.collectLocalImages(dest, 200);
+      const newImages = after.filter((p) => !before.has(p));
+      if (newImages.length === 0) {
+        // Provider may write into dest root with flat names; accept any images in dest
+        if (after.length > 0) return after.slice(0, target?.limit ?? 20);
+        throw new Error('Pixiv provider downloaded 0 images');
+      }
+      return newImages;
+    }
+
     let database: Database | undefined;
     try {
       database = new Database(config.storage!.databasePath!);
