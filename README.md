@@ -4,658 +4,225 @@
 
 **Artflow 后端服务 | Pixiv 素材工作流与视频生成引擎**
 
-面向私有部署的 Pixiv 素材采集、AI 工作流、视频合成和发布任务后端。
+面向私有部署的 Pixiv 素材采集、AI 工作流、视频合成与多平台发布后端。
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
-
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B%20LTS-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)](#)
 
 </div>
 
----
-
-## 快速导航
-
-[功能特性](#功能特性) • [快速开始](#快速开始) • [使用指南](#cli-命令行工具) • [配置说明](#核心配置)
+> English summary: Artflow-core is the backend of Artflow — Pixiv asset collection (via [pixiv-cli](https://github.com/FlanChanXwO/pixiv-cli)), AI-assisted workflow, video rendering and multi-platform publish packaging, exposed as an HTTP API for [Artflow-studio](https://github.com/tianyin231/Artflow-studio). It is a GPL-3.0-or-later derivative of [PixivFlow](https://github.com/zoidberg-xgd/PixivFlow).
 
 ---
 
-<a id="什么是-artflow-core"></a>
-## 什么是 Artflow-core？
+## 目录
 
-**Artflow-core** 是 Artflow 的后端服务，负责 Pixiv 素材抓取、任务编排、AI-first 工作流、视频生成、发布包生成和 Web API。
-
-项目仍保留独立 CLI 能力，可在命令行或服务器上运行，也可以配合 **Artflow-studio** 作为可视化工作台使用。
-
-<a id="为什么选择-artflow-core"></a>
-### 为什么选择 Artflow-core？
-
-Artflow-core 的重点是把“素材获取”扩展成完整的内容生产流程：
-
-| 优势 | 说明 |
-|------|------|
-| **完全独立运行** | 无需浏览器扩展，纯命令行工具，可在任何环境运行（服务器、Docker、CI/CD） |
-| **真正的自动化** | 设置一次，永久运行。支持 Cron 定时任务，无需人工干预 |
-| **服务器友好** | 专为服务器设计，支持后台运行、进程管理、日志轮转 |
-| **安全可靠** | 采用 OAuth 2.0 PKCE 标准流程，保障账号安全，避免密码泄露风险 |
-| **轻量级部署** | 资源占用低，无需额外服务（如数据库、Redis），SQLite 即可 |
-| **开箱即用** | 丰富的脚本工具和配置向导，3 步即可开始使用 |
-
-<a id="核心理念"></a>
-### 核心理念
-
-- **自动化优先**：设置一次，自动运行，无需人工干预
-- **智能化管理**：自动去重、断点续传、错误重试
-- **简单易用**：3 步开始使用，配置向导引导完成
-- **开箱即用**：丰富的脚本工具，无需记忆复杂命令
+[架构](#架构) • [快速开始](#快速开始) • [安装 pixiv-cli](#安装-pixiv-cli) • [环境变量](#环境变量) • [开发与测试](#开发与测试) • [端到端测试与本地全栈](#端到端测试与本地全栈) • [CLI](#cli兼容-pixivflow) • [许可与致谢](#开源许可与致谢)
 
 ---
 
-<a id="功能特性"></a>
-## 功能特性
+## 架构
 
-<a id="核心功能"></a>
-### 核心功能
+本仓库是 **Artflow-core** 后端；前端（Web / Electron / PWA）位于独立仓库 **[Artflow-studio](https://github.com/tianyin231/Artflow-studio)**，两者通过 HTTP API 通信。
 
-| 功能 | 说明 |
-|------|------|
-| **批量下载** | 支持插画和小说批量下载，可配置下载数量、筛选条件 |
-| **标签搜索** | 按标签搜索作品，支持精确匹配、部分匹配等多种模式 |
-| **随机下载** | 一键下载随机热门标签作品，快速体验工具功能 |
-| **定时任务** | Cron 表达式配置，支持每天、每周、每月定时自动下载 |
-| **智能筛选** | 按收藏数、日期范围、作品类型等多维度筛选 |
-| **语言检测** | 自动检测小说语言，支持按语言过滤（仅中文/仅非中文） |
-| **自动去重** | SQLite 数据库记录历史，自动跳过已下载作品 |
-| **断点续传** | 下载中断后自动恢复，无需重新开始 |
-| **错误处理** | 自动重试、错误恢复、智能跳过已删除/私有作品 |
-| **统计报告** | 详细的运行日志和下载统计报告 |
+```
+Artflow-studio (React / Electron / PWA)
+        │  HTTP /api/*
+        ▼
+Artflow-core  ──  WebUI API (express, 默认 127.0.0.1)
+   ├─ pixiv-provider/   PixivProvider：pixiv-cli | MCP | legacy | fixture
+   ├─ auth/             PKCE 登录、pixiv-cli 令牌导入、日志脱敏
+   ├─ publishers/       Publisher 抽象 + 各平台适配器
+   ├─ secrets/          SecretStore（AES-256-GCM）
+   ├─ workflow/         工作流编排（WorkflowManager）、模板、发布日历
+   ├─ renderer/         视频管线（fast / moviepy、ugoira、字幕、转场、壁纸导出）
+   ├─ jobs/             进程内 JobQueue；/api/metrics
+   ├─ ai/               AI 规划 schema、校验/修复、本地规则兜底
+   └─ plugins-sdk/      插件 SDK（manifest 校验、definePlugin）
+```
 
-<a id="额外优势"></a>
-### 额外优势
+| 模块 | 说明 | 当前状态 |
+|---|---|---|
+| **PixivProvider** | 统一的 Pixiv 访问接口。默认通过子进程调用 [pixiv-cli](https://github.com/FlanChanXwO/pixiv-cli)（不经 shell、令牌不进 argv）；也支持 `pixiv mcp`、原 PixivFlow 客户端（legacy）和离线 fixture。 | 已接入 WorkflowManager |
+| **登录** | OAuth 2.0 PKCE 会话（`/api/auth/login/start` → `/login/complete`），或通过 pixiv-cli 导入 refresh token（`/api/auth/import-token`）；多账号切换、代理连通性测试。账号密码自动化登录已废弃（返回 410）。 | 已接入 `/api/auth` |
+| **Publisher** | 本地导出、Wallpaper Engine、Bilibili、YouTube、Telegram、Steam Workshop、抖音、小红书（导出包）、Discord webhook。 | `/api/publishers` 提供列表与 dry-run |
+| **SecretStore** | 平台凭据加密存储（AES-256-GCM，密钥文件 0600）。 | 库 + 测试，待接入发布流程 |
+| **视频管线** | fast（ffmpeg）与 moviepy 渲染器、ugoira、封面模板、渲染预设、字幕、转场、节拍、WE 循环视频/网页壁纸。 | 库 + 测试；工作流目前仍使用 `scripts/workflow-render-video.py`，并已支持重渲染选项（转场/封面/字幕） |
+| **JobQueue / metrics** | 按任务类型限并发、重试次数；`/api/metrics`。 | 队列为库，metrics 路由已挂载 |
+| **AI 规划** | 计划 JSON schema、校验 + 自动修复、本地规则兜底；离线评测 `npm run eval:ai`（见 [docs/ai-eval-report.md](docs/ai-eval-report.md)）。工作流中的 AI 调用使用在 Studio「AI 集成」页配置的 OpenAI 兼容模型。 | 库 + 评测 |
+| **模板 / 日历 / 插件** | 内置工作流模板、发布排期（RRule）、插件 SDK。 | 库 + 测试 |
 
-- **完全独立**：无需浏览器，纯命令行工具
-- **跨平台支持**：Windows / macOS / Linux，可在任何环境运行
-- **轻量级**：资源占用低，适合服务器长期运行
-- **开源免费**：GPL-3.0 许可证，可自由定制和分发
-- **类型安全**：TypeScript 编写，类型提示完善
-- **文档完善**：详细的中文文档和教程
+> “库 + 测试”表示模块已实现并有单元测试，但尚未全部接入 HTTP API / 主工作流，后续 PR 逐步接入。
 
 ---
 
-<a id="快速开始"></a>
 ## 快速开始
 
-<a id="环境要求"></a>
 ### 环境要求
 
-- **Node.js 18+** 和 **npm 9+**（推荐使用 LTS 版本：18.x, 20.x, 22.x 或 24.x）
-- **Pixiv 账号**
-- **Windows 用户**：推荐使用 WSL（`wsl --install`）或 Git Bash
-- **Android/Termux 用户**：需要安装构建工具，详见 [Termux 安装指南](docs/TERMUX_INSTALL.md)
+- **Node.js 18+**（推荐 LTS：20.x / 22.x）和 **npm 9+**
+- **[pixiv-cli](#安装-pixiv-cli)**（真实抓取 Pixiv 时需要；离线 fixture 模式不需要）
+- **ffmpeg**（视频合成）
+- **Python 3 + moviepy**（可选，moviepy 渲染器 / `scripts/workflow-render-video.py` 使用；`npm run setup:python` 安装依赖）
+- Windows 用户推荐 WSL；Android/Termux 见 [Termux 安装指南](docs/TERMUX_INSTALL.md)
 
-> **Node.js 版本说明**：
-> - 推荐使用 **LTS（长期支持）版本**：18.x, 20.x, 22.x 或 24.x
-> - 避免使用奇数版本（如 19.x, 21.x, 23.x），这些版本可能不被所有依赖包支持
-> - 如果看到 `EBADENGINE` 警告，建议切换到 LTS 版本
-> 
-> **登录说明**：项目默认使用 Node.js 库进行登录，**无需 Python**。Python gppt 仅作为后备方案（可选）。  
-> **详细指南**：查看 [快速开始指南](docs/QUICKSTART.md)
-
-### 部署说明
-
-本仓库是 **Artflow-core** 后端。前端项目位于独立仓库 **Artflow-studio**，两者通过 HTTP API 连接。
-
-项目来源：本项目在 GPL-3.0-or-later 许可下基于 PixivFlow 二次开发，保留原许可证与必要声明；日常使用和维护以 Artflow 为准。
-
-当前 Artflow 扩展能力包括：
-
-- 仪表盘工作流：自然语言任务、Pixiv 抓取、素材预过滤、封面确认、视频生成、发布包生成。
-- AI-first 工作流：已配置 OpenAI 兼容模型时，会让 AI 参与规划、BGM 搜索/选择、镜头动效和发布文案生成；AI 调用失败会停止流程并写入日志。
-- 视频生成：使用 `scripts/workflow-render-video.py` 合成视频，支持作者/Pixiv 来源角标、镜头动效配方、封面生成、人工审核后继续。
-- BGM：支持指定本地 BGM 路径，或扫描 `bgm/`、`music/`、`assets/bgm/`、`assets/music/` 下的音频；未指定时才会尝试 AI 选择和联网下载。
-- B站发布：当前会生成发布包，并支持开放平台视频投稿接口；真实提交需要配置 B站开放平台 `Client ID`、`Client Secret` 和 `Access Token`。专栏同步接口仍是预留/排队状态。
-- 定时工作流和发布任务：支持保存工作流计划、定时运行、生成发布任务并手动提交。
-
-在新电脑上部署时，按普通 Git 项目安装即可：
+### 安装与运行
 
 ```bash
 git clone https://github.com/tianyin231/Artflow-core.git
 cd Artflow-core
 npm install
-npm run setup:python
+npm run setup:python      # 可选：安装 Python 渲染依赖
 npm run build
+npm run webui             # 启动 WebUI 后端 API，默认 http://127.0.0.1:3000
 ```
 
-首次部署需要创建本地配置文件：
+- 服务默认只监听 **127.0.0.1**；需要局域网访问时设置 `HOST=0.0.0.0`（请自行做好访问控制）。
+- 端口通过 `PORT` 修改。Artflow-studio 开发服务器默认把 `/api` 代理到 `127.0.0.1:3300`，配合使用时可 `PORT=3300 npm run webui`，或在 studio 侧设置 `VITE_DEV_API_PORT`。
+- 配置文件默认位于 `~/.pixivflow/config/standalone.config.json`；可用 `ARTFLOW_CONFIG` 指定文件，或用 `ARTFLOW_DATA_DIR` 把配置与数据隔离到单独目录。缺少 refresh token 时只告警、不阻止启动，可在 Studio 的「账号与连接」页登录。
 
-```bash
-cp config/standalone.config.example.json config/standalone.config.json
-```
+### 5 分钟离线体验（fixture 模式）
 
-然后编辑 `config/standalone.config.json`，填写 Pixiv 登录信息、下载目录、数据库路径等本机配置。
-
-不要提交这些本地运行文件：
-
-- `config/standalone.config.json`
-- `config/.current-config`
-- `config/backups/`
-- `data/`
-- `downloads/`
-- `workflow_runs/`
-- `logs/`
-- `*.db`, `*.db-shm`, `*.db-wal`
-- `.env*`
-- `node_modules/`
-- `dist/`
-
-这些内容由 `.gitignore` 排除，属于本机配置、运行数据或构建产物。
-
-隐私与上传说明：
-
-- Pixiv 下载会请求 Pixiv 官方接口，并使用本地配置中的 Pixiv 登录凭证。
-- AI-first 模式会把任务指令、视频规划、部分素材元数据、BGM 候选名称等文本发送到你配置的 AI 服务；不会上传图片或视频文件本体。
-- 自动联网 BGM 搜索会向外部音频库发送搜索词；指定本地 BGM 时不会进入 AI/联网选曲。
-- B站投稿只有在手动提交发布任务时才会上传视频、封面和投稿文本。
-
-常用运行命令：
-
-```bash
-npm run download       # 执行一次下载
-npm run scheduler      # 启动定时任务
-npm run webui          # 启动后端 API 服务，默认端口 3000
-```
-
-如果在新电脑上遇到 `better-sqlite3` 的 Node ABI 或原生模块错误，先尝试：
-
-```bash
-npm rebuild better-sqlite3
-```
-
-仍有问题时，删除依赖后重新安装：
-
-```bash
-rm -rf node_modules
-npm install
-```
-
-视频生成依赖 `scripts/workflow-render-video.py` 和 Python 图像/视频处理包。新环境需要执行：
-
-```bash
-npm run setup:python
-```
-
-该命令会安装 `requirements-python.txt` 中的依赖，包括登录后备库 `gppt` 以及视频渲染所需的 `moviepy`、`pillow`、`numpy`、`imageio-ffmpeg`、`proglog`。
-
-<a id="快速安装推荐"></a>
-### 快速运行（推荐）
-
-#### 方式 1：从 Artflow-core 源码运行
+不需要 Pixiv 账号：使用内置 fixture 数据和 mock 服务，同时启动 core 与 studio（需要把 Artflow-studio 克隆到同级目录）：
 
 ```bash
 git clone https://github.com/tianyin231/Artflow-core.git
+git clone https://github.com/tianyin231/Artflow-studio.git
+(cd Artflow-core && npm install) && (cd Artflow-studio && npm install)
 cd Artflow-core
-npm install
-npm run setup:python
-npm run build
-npm run webui
+npm run dev:stack:fixture         # = bash scripts/dev/dev-stack.sh --fixture
+# 就绪后打开 http://127.0.0.1:5373 （core: 127.0.0.1:3300，mock: 127.0.0.1:3302）
 ```
 
-当前兼容 CLI 命令仍为 `pixivflow`，可以直接指定配置文件运行：
+### Docker
 
 ```bash
-# 使用 --config 指定配置
-pixivflow download --config "$(pwd)/config/standalone.config.json"
-
-# 或使用环境变量（对所有命令生效）
-export PIXIV_DOWNLOADER_CONFIG="$(pwd)/config/standalone.config.json"
-pixivflow download
+docker compose -f deploy/docker-compose.yml up -d                       # core + studio
+ARTFLOW_FIXTURE_MODE=1 docker compose -f deploy/docker-compose.yml --profile fixture up
 ```
 
-#### 方式 2：命令行下载
-
-```bash
-npm run login
-npm run download
-```
-
-**或使用一键脚本**（自动完成所有设置）：
-
-```bash
-./scripts/quick-start.sh
-```
+> `deploy/docker-compose.yml` 中的 studio 服务需要 Artflow-studio 提供 Dockerfile（尚未提供，当前为草稿）。仓库根目录的 `docker-compose.yml` 是继承自 PixivFlow 的旧版定时下载/WebUI 编排，详见 [Docker 使用指南](docs/DOCKER.md)。
 
 ---
 
-> **提示**：
-> - 配置文件位于 `~/.pixivflow/config/standalone.config.json`，或使用 `--config` 指定路径
-> - 首次使用需要运行 `npm run login` 或 `pixivflow login` 进行登录
-> - **更多安装方式**：从源码安装、Docker 部署等，请查看 [快速开始指南](docs/QUICKSTART.md)
-> - **配置文件管理**：查看 [配置指南](docs/CONFIG.md) 了解配置文件的使用方法
+## 安装 pixiv-cli
+
+Artflow-core 通过 [FlanChanXwO/pixiv-cli](https://github.com/FlanChanXwO/pixiv-cli) 访问 Pixiv。按该项目 README 安装（下载 Release 二进制或从源码构建）后，二选一：
+
+1. 把可执行文件放到 `PATH` 中，命名为 `pixiv`（默认查找 `pixiv`）；或
+2. 设置 `PIXIV_CLI_PATH=/path/to/pixiv`（也可在配置文件中设置 `pixiv.cliPath`）。
+
+查找顺序：配置 `pixiv.cliPath` > `PIXIV_CLI_PATH` > `ARTFLOW_PIXIV_CLI`（旧名，兼容）> `PATH` 中的 `pixiv`。
+pixiv-cli 的登录状态默认保存在 `~/.pixiv-cli`，可用 `PIXIV_CLI_HOME` 指定另一个 HOME 目录。
 
 ---
 
-### WebUI 后端 API（可选）
+## 环境变量
 
-Artflow-core 提供 WebUI 后端 API 服务，支持通过 RESTful API 和 WebSocket 进行管理：
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `HOST` / `ARTFLOW_HOST` | `127.0.0.1` | 监听地址 |
+| `PORT` | `3000` | API 端口 |
+| `ARTFLOW_CONFIG` | — | 配置文件路径 |
+| `ARTFLOW_DATA_DIR` | — | 数据/配置隔离目录（fixture、测试、容器） |
+| `ARTFLOW_PIXIV_PROVIDER` | `pixiv-cli` | `pixiv-cli` / `mcp` / `legacy` / `fixture` |
+| `ARTFLOW_FIXTURE_MODE` | `0` | `1` = 离线 fixture 模式 |
+| `ARTFLOW_FIXTURE_DIR` | 内置 `fixtures/pixiv` | 自定义 fixture 目录 |
+| `PIXIV_CLI_PATH` | `pixiv`（PATH） | pixiv-cli 可执行文件；旧名 `ARTFLOW_PIXIV_CLI` |
+| `PIXIV_CLI_HOME` | 当前 `HOME` | pixiv-cli 状态目录；旧名 `ARTFLOW_PIXIV_CLI_HOME` |
+| `ARTFLOW_AUTH_IMPORTER` | 自动 | `cli` = 强制使用 pixiv-cli 导入令牌 |
+| `ARTFLOW_PIXIV_OAUTH_BASE_URL` | `https://oauth.secure.pixiv.net` | OAuth 地址（测试时指向 mock） |
+| `ARTFLOW_PIXIV_CLIENT_ID` / `ARTFLOW_PIXIV_CLIENT_SECRET` | Pixiv 官方客户端 | PKCE 换取令牌所用客户端 |
+| `ARTFLOW_PYTHON` | 自动探测 | moviepy 渲染所用 Python |
+| `ARTFLOW_TIMEZONE` | 系统时区 | 文件命名/日期使用的时区 |
+| `ARTFLOW_SKIP_EXTERNAL_BGM` | — | `1` = 不联网下载 BGM |
+| `ARTFLOW_SECRET_KEY` / `ARTFLOW_SECRET_KEY_FILE` | `$ARTFLOW_DATA_DIR/secret.key` | SecretStore 密钥 |
+| `ARTFLOW_BILIBILI_CLIENT_ID` / `_CLIENT_SECRET` / `_REDIRECT` / `_BASE_URL` | — | B站开放平台 |
+| `ARTFLOW_TELEGRAM_BOT_TOKEN` / `ARTFLOW_TELEGRAM_CHAT_ID` | — | Telegram 发布 |
+| `ARTFLOW_DISCORD_WEBHOOK` | — | Discord webhook 发布 |
+| `ARTFLOW_STEAMCMD` / `ARTFLOW_STEAM_USER` | — | Steam Workshop 上传 |
 
-```bash
-# 启动 WebUI 后端 API 服务
-pixivflow webui                    # 默认端口 3000
-
-# 或使用环境变量指定端口
-PORT=8080 pixivflow webui
-```
-
-**主要功能**：
-- **认证 API**：登录、登出、Token 管理
-- **配置管理 API**：查看、编辑、备份、恢复配置
-- **下载管理 API**：启动/停止下载、查看任务状态
-- **统计 API**：下载统计、文件列表
-- **日志 API**：查看运行日志（支持 WebSocket 实时推送）
-- **文件管理 API**：文件列表、预览、操作
-
-> **说明**：
-> - Artflow-core 只提供后端 API，不包含前端界面
-> - **前端项目**：React 前端界面请使用 **Artflow-studio**
-> - 可以通过 API 直接调用，或连接其他前端项目
-> - **API 文档**：查看 [使用指南](docs/USAGE.md) 了解详细的 API 使用方法
-
----
-
-### Docker 部署（推荐）
-
-Docker 部署无需安装 Node.js 环境：
-
-```bash
-# 快速开始
-cp config/standalone.config.example.json config/standalone.config.json
-npm run login                    # 在主机上登录
-docker-compose up -d             # 启动服务
-```
-
-> **详细说明**：查看 [Docker 使用指南](docs/DOCKER.md) 了解完整的部署方法和常见问题
+⚠️ 凭据只通过环境变量或 SecretStore 提供，**不要提交到仓库**。
 
 ---
 
-## CLI 命令行工具
-
-> **说明**：当前兼容 CLI 命令名仍为 `pixivflow`，可在项目目录或全局安装后使用。
-
-<a id="核心命令"></a>
-### 核心命令
+## 开发与测试
 
 ```bash
-# 全局安装后使用
-pixivflow login                      # 登录 Pixiv 账号
-pixivflow download                   # 执行下载
-pixivflow download --url <url>       # 通过 URL 直接下载（支持插画/小说/系列）
-pixivflow random                     # 随机下载
-pixivflow scheduler                  # 启动定时任务
-pixivflow normalize                  # 整理文件
-pixivflow migrate-config             # 迁移配置
-pixivflow health                     # 健康检查（推荐）
-pixivflow status                     # 查看下载统计和最近记录
-pixivflow logs                       # 查看运行日志
-pixivflow setup                      # 交互式配置向导（首次使用）
-pixivflow dirs                       # 查看目录信息（文件保存位置）
+npm run build            # tsc
+npm run lint             # eslint
+npm test                 # jest（全部单元/集成测试，离线；网络访问被测试 setup 拦截）
+npm run test:fixture     # 只跑 provider / renderer 的 fixture 测试
+npm run test:slow        # 慢测试（真实 moviepy 渲染，需要 Python + moviepy + ffmpeg）
+npm run eval:ai          # AI 规划离线评测
 ```
 
-**URL 下载示例**：
-```bash
-# 下载插画
-pixivflow download --url "https://www.pixiv.net/artworks/12345678"
+- 建议分别在 `TZ=UTC` 与 `TZ=Asia/Shanghai` 下运行测试（时区相关用例）。
+- 真实 pixiv-cli 冒烟测试默认跳过；设置 `ARTFLOW_REAL_PIXIV_CLI=/path/to/pixiv` 启用。
 
-# 下载小说
-pixivflow download --url "https://www.pixiv.net/novel/show.php?id=26132156"
+## 端到端测试与本地全栈
 
-# 下载小说系列
-pixivflow download --url "https://www.pixiv.net/novel/series/14690617"
-
-# 下载用户的所有作品
-pixivflow download --url "https://www.pixiv.net/users/123456"
-```
-
-#### 无图形界面服务器的登录方式（使用现有 refresh token）
-
-```bash
-# 直接使用 refresh token 登录（会自动写入配置文件）
-pixivflow refresh <your_refresh_token>
-
-# 等价别名：
-pixivflow login-token <your_refresh_token>
-pixivflow set-token <your_refresh_token>
-```
-
-> 适用于没有图形浏览器的服务器；若没有 token，可在本地运行 `pixivflow login` 获取后复制到服务器。
-
-<a id="配置管理"></a>
-### 配置管理
-
-```bash
-pixivflow config                     # 配置管理（查看/编辑/备份/恢复）
-pixivflow config show                # 查看配置
-pixivflow config set <key> <value>   # 设置配置项（如：storage.downloadDirectory）
-pixivflow config backup              # 备份配置
-pixivflow config restore             # 恢复配置
-pixivflow config validate            # 验证配置
-pixivflow config edit                # 编辑配置
-```
-
-**配置设置示例**：
-```bash
-# 设置下载目录
-pixivflow config set storage.downloadDirectory ./my-downloads
-
-# 设置插画目录
-pixivflow config set storage.illustrationDirectory ./my-illustrations
-
-# 设置小说目录
-pixivflow config set storage.novelDirectory ./my-novels
-```
-
-<a id="监控与维护"></a>
-### 监控与维护
-
-```bash
-pixivflow monitor                    # 实时监控进程状态和性能指标
-pixivflow maintain                   # 自动维护（清理日志、优化数据库等）
-pixivflow backup                     # 自动备份配置和数据
-```
-
-> 📖 **详细说明**：查看 [脚本使用指南](docs/SCRIPTS.md)
-
----
-
-## 脚本工具
-
-<a id="脚本工具"></a>
-
-Artflow-core 保留了丰富的脚本工具，所有脚本直接调用内置 CLI，性能更好、响应更快。
-
-> **说明**：Artflow-core 可独立运行在服务器、Docker、CI/CD 等环境。常规下载和维护功能都可通过命令行使用。
-
-### 主控脚本（最常用）
-
-```bash
-./scripts/pixiv.sh <command>
-```
+`scripts/dev/` 下的脚本默认在同级目录寻找 Artflow-studio，可用 `ARTFLOW_STUDIO_DIR` 指定；本地状态写入 `.artflow-dev/`（已 gitignore）。
 
 | 命令 | 说明 |
-|------|------|
-| `setup` | 交互式配置向导（首次必须运行） |
-| `login` | 登录 Pixiv 账号（交互式，直接调用内置CLI） |
-| `test` | 测试下载（下载少量作品验证配置） |
-| `once` | 执行一次下载 |
-| `random` | 随机下载一个热门标签作品（支持 `--novel` 下载小说） |
-| `run` | 启动定时任务（后台持续运行） |
-| `stop` | 停止运行的定时任务 |
-| `status` | 查看当前运行状态 |
-| `check` | 环境检查（支持 `--fix` 自动修复） |
-| `update` | 一键更新和修复（更新代码、依赖、修复错误） |
-| `health` | 健康检查（检查配置、网络等）<br>**全局安装后使用**: `pixivflow health` |
-| `status` | 查看下载统计和最近记录<br>**全局安装后使用**: `pixivflow status`  |
-| `logs` | 查看运行日志<br>**全局安装后使用**: `pixivflow logs`  |
-| `config` | 配置管理工具（查看/编辑/备份/恢复）<br>**全局安装后使用**: `pixivflow config` |
-| `backup` | 自动备份配置和数据<br>**全局安装后使用**: `pixivflow backup` |
-| `maintain` | 自动维护（清理日志、优化数据库等）<br>**全局安装后使用**: `pixivflow maintain` |
-| `monitor` | 实时监控进程状态和性能指标<br>**全局安装后使用**: `pixivflow monitor` |
-| `setup` | 交互式配置向导（首次使用）<br>**全局安装后使用**: `pixivflow setup` |
+|---|---|
+| `npm run dev:stack` / `dev:stack:fixture` | 启动 mock + core + studio（`--prod` 用生产构建 + `vite preview`）；端口冲突或任一进程失败立即退出并清理进程组 |
+| `npm run verify:all` | 一键验证：core/studio 构建、lint、测试（UTC + Asia/Shanghai）、compose 校验、Playwright E2E、AI 评测、i18n、密钥扫描 |
+| `npm run scan:secrets` | 扫描工作区、日志、报告与 git 历史中的测试哨兵值 |
+| `npm run validate:compose` | 静态校验 `deploy/docker-compose.yml` |
+| `node scripts/dev/wait-healthy.mjs` | 等待 core / studio 健康 |
 
-### 其他工具
+Playwright E2E 位于 Artflow-studio：在 studio 目录运行 `npx playwright test`，会自动调用本仓库的 `scripts/dev/dev-stack.sh --fixture --prod`（通过 `ARTFLOW_CORE_DIR` 指定本仓库位置，默认 `../Artflow-core`）。
+
+---
+
+## CLI（兼容 PixivFlow）
+
+继承自 PixivFlow 的命令行仍可使用，命令名为 `pixivflow`：
 
 ```bash
-# 环境检查和修复
-./scripts/pixiv.sh check --fix       # 自动修复环境问题
-./scripts/pixiv.sh update            # 一键更新和修复
+pixivflow login                      # 登录（交互式）
+pixivflow refresh <refresh_token>    # 无图形界面服务器：直接写入 refresh token
+pixivflow download                   # 按配置下载
+pixivflow download --url <url>       # 按 URL 下载（插画/小说/系列/用户）
+pixivflow scheduler                  # 定时任务
+pixivflow health                     # 健康检查
+pixivflow status | logs | dirs       # 统计 / 日志 / 目录
+pixivflow config show|set|backup|restore|validate
+pixivflow webui                      # 启动 WebUI 后端 API
 ```
 
-> 📖 **详细说明**：查看 [脚本使用指南](docs/SCRIPTS.md)
-
----
-
-<a id="文档导航"></a>
-## 文档导航
-
-> **完整文档索引**: 查看 [文档导航](docs/README.md) 获取所有文档的完整列表和分类
-
-### 新手必读（按顺序阅读）
-
-| 文档 | 说明 |
-|------|------|
-| [QUICKSTART](docs/QUICKSTART.md) | **3 分钟快速上手** - 最快开始使用 |
-| [LOGIN](docs/LOGIN.md) | **登录流程详解** - 登录问题解决方案 |
-| [USAGE](docs/USAGE.md) | **使用指南** - 功能使用说明 |
-
-### 功能指南
-
-| 文档 | 说明 |
-|------|------|
-| [CONFIG](docs/CONFIG.md) | **配置文件使用指南** - 所有配置选项详解 |
-| [SCRIPTS](docs/SCRIPTS.md) | **脚本使用指南** - 所有脚本详细说明 |
-
-### 部署和环境
-
-| 文档 | 说明 |
-|------|------|
-| [DOCKER](docs/DOCKER.md) | **Docker 使用指南** - Docker 部署和使用（包含常见问题解决方案） |
-| [TERMUX](docs/TERMUX_INSTALL.md) | **Termux/Android 安装指南** - Android 设备上的安装和使用 |
-
-### 项目文档
-
-| 文档 | 说明 |
-|------|------|
-| [ARCHITECTURE](docs/ARCHITECTURE.md) | **架构说明** - 项目架构和技术实现细节 |
-| [CLI_MIGRATION](docs/CLI_MIGRATION_SUMMARY.md) | **CLI 命令移植总结** - CLI 命令迁移和功能对照 |
-| [CHANGELOG](docs/project/CHANGELOG.md) | 版本更新日志 |
-| [CONTRIBUTING](docs/project/CONTRIBUTING.md) | 贡献指南 |
-
----
-
-<a id="使用场景"></a>
-## 使用场景
-
-### 常见使用方式
-
-| 场景 | 命令 | 说明 |
-|------|------|------|
-| **快速体验** | `pixivflow random` | 随机下载热门作品，快速上手 |
-| **一次性下载** | `pixivflow download` | 按配置文件执行一次下载 |
-| **定时自动化** | `pixivflow scheduler` | 启动定时任务，自动化收集 |
-| **URL 下载** | `pixivflow download --url <url>` | 直接下载指定作品或用户 |
-
-> 💡 **详细配置示例**：查看 [配置文件使用指南](docs/CONFIG.md) 了解各种使用场景的完整配置方法
-
----
-
-
-<a id="核心配置"></a>
-## 核心配置
-
-### 快速配置
-
-```bash
-# 首次使用 - 交互式配置向导
-pixivflow setup
-
-# 或手动编辑配置文件
-pixivflow config edit
-```
-
-### 基本配置结构
+基本配置示例：
 
 ```json
 {
   "targets": [
-    {
-      "type": "illustration",     // 内容类型：illustration 或 novel
-      "tag": "風景",              // 搜索标签
-      "limit": 20,                // 下载数量
-      "minBookmarks": 500         // 最低收藏数（可选）
-    }
+    { "type": "illustration", "tag": "風景", "limit": 20, "minBookmarks": 500 }
   ],
-  "scheduler": {
-    "enabled": true,              // 启用定时任务
-    "cron": "0 2 * * *"          // 每天 2:00 执行
-  }
+  "scheduler": { "enabled": true, "cron": "0 2 * * *" }
 }
 ```
 
-> 📚 **完整配置说明**：查看 [配置文件使用指南](docs/CONFIG.md) 了解所有配置选项和详细示例
-
----
-
-## 使用建议
-
-- 首次使用运行 `pixivflow setup` 进行配置
-- 使用 `pixivflow health` 检查配置和网络状态
-- 定期使用 `pixivflow backup` 备份数据
-
----
-
-## 🐛 常见问题
-
-遇到问题？试试这些快速解决方案：
-
-| 问题 | 解决方法 |
-|------|----------|
-| **登录失败** | `pixivflow login` 重新登录 |
-| **找不到作品** | 检查标签拼写，降低 `minBookmarks` 值 |
-| **下载失败** | `pixivflow health` 检查网络和配置 |
-| **定时任务异常** | `pixivflow status` 查看运行状态 |
-
-> 📖 **详细故障排除**：查看 [使用指南](docs/USAGE.md) 了解完整的问题解决方案
+更多：[快速开始](docs/QUICKSTART.md) · [配置](docs/CONFIG.md) · [使用指南](docs/USAGE.md) · [API](docs/API.md) · [脚本](docs/SCRIPTS.md) · [Docker](docs/DOCKER.md)
 
 ---
 
 ## 安全提示
 
-⚠️ **重要**：配置文件包含敏感的认证信息，请勿分享或提交到代码仓库。如需帮助，请删除敏感信息后再分享配置内容。
+- 配置文件和 pixiv-cli 状态目录包含认证信息，请勿分享或提交到仓库。
+- API 不回显令牌，日志经过脱敏（`auth/redact`）。
+- 服务默认只监听本机；对外暴露前请加反向代理与鉴权。
 
 ---
 
-## 进阶使用
+## 开源许可与致谢
 
-需要服务器部署、代理配置、多任务管理等高级功能？
+本项目以 [GPL-3.0-or-later](LICENSE) 许可开源，基于 [PixivFlow](https://github.com/zoidberg-xgd/PixivFlow)（GPL-3.0 时期的 v2.0.x 版本）二次开发，保留原许可证与版权声明。修改后的代码同样必须以 GPL 兼容方式开源。
 
-> 📖 **完整指南**：查看 [使用指南](docs/USAGE.md) 和 [Docker 部署指南](docs/DOCKER.md) 了解详细的进阶使用方法
+- [PixivFlow](https://github.com/zoidberg-xgd/PixivFlow) — 本项目的上游（上游后续版本已改为 MIT 许可；本仓库继承的是 GPL-3.0 版本，若移植上游 MIT 代码请同时保留其 MIT 声明）
+- [pixiv-cli](https://github.com/FlanChanXwO/pixiv-cli)（MIT）— Pixiv 访问；本项目以外部可执行文件方式调用，未包含其源码
+- [PixivBatchDownloader](https://github.com/xuejianxianzun/PixivBatchDownloader) — 灵感来源
+- [get-pixivpy-token](https://github.com/eggplants/get-pixivpy-token) — OAuth 认证实现参考
 
----
-
-<a id="开源许可"></a>
-## 开源许可
-
-本项目采用 [GPL-3.0-or-later](LICENSE) 许可证开源。
-
-**这意味着：**
-- ✅ 可以自由使用、修改和分发
-- ✅ 修改后的代码也必须开源
-- ✅ 需要保留原作者信息和许可证声明
-
----
-
-<a id="致谢"></a>
-## 致谢
-
-### 灵感来源
-
-- [PixivBatchDownloader](https://github.com/xuejianxianzun/PixivBatchDownloader) - 浏览器扩展版本
-- [get-pixivpy-token](https://github.com/eggplants/get-pixivpy-token) - OAuth 认证实现参考
-
-### 感谢所有贡献者 🎉
-
----
-
-<a id="获取帮助"></a>
-## 获取帮助
-
-| 类型 | 渠道 | 说明 |
-|------|------|------|
-| 🐛 **Bug 反馈** | 当前仓库 Issues | 报告问题和错误 |
-| 💡 **功能建议** | 当前仓库 Discussions | 提出新功能想法 |
-| 📖 **使用问题** | [查看文档](docs/README.md) | 查阅完整文档 |
-| ✅ **环境检查** | `./scripts/pixiv.sh health` | 运行健康检查 |
-| 💬 **本地排查** | `./scripts/pixiv.sh logs` | 查看运行日志 |
-
-**提问前请先**：
-1. 🔍 查看 [常见问题](#常见问题) 章节
-2. 📖 阅读相关文档
-3. ✅ 运行健康检查 `./scripts/pixiv.sh health`
-4. 📋 查看运行日志 `./scripts/pixiv.sh logs`
-
----
-
-<a id="性能指标"></a>
-## 性能指标
-
-- ⚡ **启动速度**：< 2 秒
-- 📦 **包大小**：< 5 MB（不含依赖）
-- 💾 **内存占用**：< 100 MB（运行时）
-- 🔄 **下载速度**：支持并发下载，智能限流和动态并发调整
-- 📊 **数据库**：SQLite，轻量级，无需额外服务
-
----
-
-<a id="贡献"></a>
-## 贡献
-
-我们欢迎所有形式的贡献！无论是报告 Bug、提出功能建议，还是提交代码，都非常感谢。
-
-### 如何贡献
-
-1. **Fork 项目**
-2. **创建特性分支** (`git checkout -b feature/AmazingFeature`)
-3. **提交更改** (`git commit -m 'Add some AmazingFeature'`)
-4. **推送到分支** (`git push origin feature/AmazingFeature`)
-5. **开启 Pull Request**
-
-### 贡献指南
-
-详细的贡献指南请查看 [CONTRIBUTING.md](docs/project/CONTRIBUTING.md)，包含：
-- 行为准则
-- 开发环境设置
-- 代码规范
-- 提交规范
-- Pull Request 流程
-
----
-
-<a id="更新日志"></a>
-## 更新日志
-
-查看 [CHANGELOG.md](docs/project/CHANGELOG.md) 了解详细的版本更新记录。
-
----
-
-<a id="支持项目"></a>
-## 支持项目
-
-如果这个项目对你有帮助，请考虑：
-
-- ⭐ **给项目一个 Star** - 让更多人发现这个项目
-- 🍴 **Fork 项目** - 创建你自己的版本
-- 🐛 **报告 Bug** - 帮助我们改进
-- 💡 **提出建议** - 分享你的想法
-- 📢 **分享给更多人** - 让更多人受益
-- 💻 **贡献代码** - 参与项目开发
-
-<div align="center">
-
-### Artflow-core
-
----
-
-Artflow-core
-
-Pixiv 素材工作流与视频生成后端。
-
-[⬆ 回到顶部](#artflow-core)
-
----
-
-**相关链接**：
-- [完整文档](docs/README.md)
-- [前端项目：Artflow-studio](../Artflow-studio)
-
-</div>
+问题反馈与建议请使用本仓库 Issues；贡献流程见 [CONTRIBUTING.md](docs/project/CONTRIBUTING.md)，更新记录见 [CHANGELOG.md](docs/project/CHANGELOG.md)。
