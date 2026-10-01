@@ -17,6 +17,22 @@ jest.mock('../../utils/fs', () => ({
   ensureDir: jest.fn(),
 }));
 
+
+const tz = 'Asia/Tokyo';
+function todayPartsInTz(): { ym: string; ymd: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return {
+    ym: `${get('year')}-${get('month')}`,
+    ymd: `${get('year')}-${get('month')}-${get('day')}`,
+  };
+}
+
 describe('FileService', () => {
   let fileService: FileService;
   let mockStorage: StorageConfig;
@@ -222,16 +238,12 @@ describe('FileService', () => {
 
     it('should organize by download date for byDownloadDate mode', () => {
       const result = fileService.getOrganizedDirectory('/base', 'byDownloadDate');
-      const today = new Date();
-      const expectedMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-      expect(result).toContain(expectedMonth);
+      expect(result).toContain(todayPartsInTz().ym);
     });
 
     it('should organize by download day for byDownloadDay mode', () => {
       const result = fileService.getOrganizedDirectory('/base', 'byDownloadDay');
-      const today = new Date();
-      const expectedDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-      expect(result).toContain(expectedDay);
+      expect(result).toContain(todayPartsInTz().ymd);
     });
 
     it('should organize by date and author for byDateAndAuthor mode', () => {
@@ -302,9 +314,7 @@ describe('FileService', () => {
 
     it('should use current date when metadata date is missing', () => {
       const result = fileService.getOrganizedDirectory('/base', 'byDate');
-      const today = new Date();
-      const expectedMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-      expect(result).toContain(expectedMonth);
+      expect(result).toContain(todayPartsInTz().ym);
     });
   });
 

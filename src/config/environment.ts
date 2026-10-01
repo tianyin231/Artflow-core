@@ -88,6 +88,56 @@ export function applyEnvironmentOverrides(config: Partial<StandaloneConfig>): Pa
     }
   }
 
+  // Artflow overhaul: provider / runtime / fixture overrides
+  if (process.env.ARTFLOW_PIXIV_PROVIDER) {
+    const p = process.env.ARTFLOW_PIXIV_PROVIDER as 'pixiv-cli' | 'mcp' | 'legacy' | 'fixture';
+    if (['pixiv-cli', 'mcp', 'legacy', 'fixture'].includes(p)) {
+      if (!overridden.pixiv) {
+        overridden.pixiv = {
+          clientId: '',
+          clientSecret: '',
+          deviceToken: '',
+          refreshToken: '',
+          userAgent: 'PixivAndroidApp/5.0.234 (Android 11; Pixel 6)',
+          provider: p,
+        };
+      } else {
+        overridden.pixiv.provider = p;
+      }
+    }
+  }
+  // PIXIV_CLI_PATH (preferred) or ARTFLOW_PIXIV_CLI (legacy alias)
+  const pixivCliEnv = process.env.PIXIV_CLI_PATH || process.env.ARTFLOW_PIXIV_CLI;
+  if (pixivCliEnv) {
+    if (!overridden.pixiv) {
+      overridden.pixiv = {
+        clientId: '',
+        clientSecret: '',
+        deviceToken: '',
+        refreshToken: '',
+        userAgent: 'PixivAndroidApp/5.0.234 (Android 11; Pixel 6)',
+        cliPath: pixivCliEnv,
+      };
+    } else {
+      overridden.pixiv.cliPath = pixivCliEnv;
+    }
+  }
+  const pixivCliHomeEnv = process.env.PIXIV_CLI_HOME ?? process.env.ARTFLOW_PIXIV_CLI_HOME;
+  if (pixivCliHomeEnv !== undefined) {
+    if (overridden.pixiv) {
+      overridden.pixiv.cliHome = pixivCliHomeEnv || null;
+    }
+  }
+  if (process.env.ARTFLOW_PYTHON) {
+    overridden.runtime = { ...(overridden.runtime ?? {}), python: process.env.ARTFLOW_PYTHON };
+  }
+  if (process.env.ARTFLOW_FIXTURE_MODE === '1' || process.env.ARTFLOW_FIXTURE_MODE === 'true') {
+    overridden.runtime = { ...(overridden.runtime ?? {}), fixtureMode: true };
+  }
+  if (process.env.ARTFLOW_TIMEZONE) {
+    overridden.runtime = { ...(overridden.runtime ?? {}), timezone: process.env.ARTFLOW_TIMEZONE };
+  }
+
   // Override scheduler enabled
   if (process.env.PIXIV_SCHEDULER_ENABLED !== undefined) {
     if (!overridden.scheduler) {

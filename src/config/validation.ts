@@ -28,8 +28,17 @@ export class ConfigValidationError extends Error {
  * @param config Configuration to validate
  * @param location Location description for error messages
  * @param databasePath Optional database path to check unified storage for tokens
+ * @param options.requirePixivToken When false (lenient), missing refresh token is a warning not an error
  */
-export function validateConfig(config: Partial<StandaloneConfig>, location: string, databasePath?: string): void {
+const warnedOnce = new Set<string>();
+
+export function validateConfig(
+  config: Partial<StandaloneConfig>,
+  location: string,
+  databasePath?: string,
+  options: { requirePixivToken?: boolean } = {}
+): void {
+  const requirePixivToken = options.requirePixivToken !== false;
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -46,28 +55,32 @@ export function validateConfig(config: Partial<StandaloneConfig>, location: stri
     if (!config.pixiv.deviceToken || config.pixiv.deviceToken.trim() === '') {
       errors.push('pixiv.deviceToken: Required field is missing or empty');
     }
-    
+
     // Token validation: Check if token exists in config OR unified storage
     // This allows config files with placeholder tokens if unified storage has a valid token
     const configToken = config.pixiv.refreshToken;
     const hasValidConfigToken = !isPlaceholderToken(configToken);
-    
+
     if (!hasValidConfigToken && databasePath) {
       // Config file has placeholder - check unified storage
       const unifiedToken = getBestAvailableToken(configToken, databasePath);
       if (unifiedToken) {
         // Unified storage has token - this is acceptable, config will be synced
         logger.debug('Config file has placeholder token, but unified storage has valid token - validation passed');
-      } else {
-        // No token anywhere - this is an error
+      } else if (requirePixivToken) {
         errors.push('pixiv.refreshToken: No valid refresh token found. Please login to authenticate.');
+      } else {
+        warnings.push('pixiv.refreshToken: No valid refresh token found (lenient mode; Pixiv calls will require auth)');
       }
     } else if (!hasValidConfigToken) {
-      // No database path and config has placeholder - error
-      errors.push('pixiv.refreshToken: No valid refresh token found. Please login to authenticate.');
+      if (requirePixivToken) {
+        errors.push('pixiv.refreshToken: No valid refresh token found. Please login to authenticate.');
+      } else {
+        warnings.push('pixiv.refreshToken: No valid refresh token found (lenient mode; Pixiv calls will require auth)');
+      }
     }
     // If hasValidConfigToken is true, token is valid - no error
-    
+
     if (!config.pixiv.userAgent || config.pixiv.userAgent.trim() === '') {
       errors.push('pixiv.userAgent: Required field is missing or empty');
     }
@@ -176,9 +189,20 @@ export function validateConfig(config: Partial<StandaloneConfig>, location: stri
     errors.push(`logLevel: Must be one of: debug, info, warn, error (got "${config.logLevel}")`);
   }
 
-  // Report warnings
+  // Report warnings once per unique message (avoid per-request spam).
+  // Fixture mode suppresses the refreshToken warning entirely.
   if (warnings.length > 0) {
-    logger.warn('Configuration warnings:', { warnings, location });
+    const fixture = process.env.ARTFLOW_FIXTURE_MODE === '1' || config.runtime?.fixtureMode;
+    const filtered = fixture
+      ? warnings.filter((w) => !w.includes('refreshToken'))
+      : warnings;
+    if (filtered.length > 0) {
+      const key = filtered.join('|');
+      if (!warnedOnce.has(key)) {
+        warnedOnce.add(key);
+        logger.warn('Configuration warnings:', { warnings: filtered, location });
+      }
+    }
   }
 
   // Throw error if there are critical issues

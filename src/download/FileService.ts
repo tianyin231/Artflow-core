@@ -41,8 +41,41 @@ export interface PixivMetadata {
   };
 }
 
+/**
+ * Format a Date's Y/M/D parts in a fixed IANA timezone (independent of process TZ).
+ */
+export function getDatePartsInTz(date: Date, timeZone: string = 'Asia/Tokyo'): {
+  year: string;
+  month: string;
+  day: string;
+} {
+  // en-CA yields YYYY-MM-DD
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+  };
+}
+
 export class FileService implements IFileService {
-  constructor(private readonly storage: StorageConfig) {}
+  private readonly timeZone: string;
+
+  constructor(
+    private readonly storage: StorageConfig,
+    timeZone: string = (globalThis as { __ARTFLOW_TIMEZONE__?: string }).__ARTFLOW_TIMEZONE__ ||
+      process.env.ARTFLOW_TIMEZONE ||
+      'Asia/Tokyo'
+  ) {
+    this.timeZone = timeZone;
+  }
 
   public async initialise() {
     await ensureDir(this.storage.downloadDirectory!);
@@ -82,7 +115,7 @@ export class FileService implements IFileService {
 
   public sanitizeFileName(name: string) {
     return name
-      .replace(/[\/:*?"<>|]/g, '_')
+      .replace(/[/:*?"<>|]/g, '_')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -90,7 +123,7 @@ export class FileService implements IFileService {
   public sanitizeDirectoryName(name: string): string {
     // Sanitize directory name, more restrictive than file names
     return name
-      .replace(/[\/:*?"<>|\\]/g, '_')
+      .replace(/[/:*?"<>|\\]/g, '_')
       .replace(/\s+/g, '_')
       .replace(/\./g, '_')
       .replace(/^_+|_+$/g, '')
@@ -109,8 +142,8 @@ export class FileService implements IFileService {
 
     // Check if baseDirectory already ends with a type-specific directory name
     // This prevents duplicate type directories when baseDirectory is already novelDirectory or illustrationDirectory
-    const baseDirNormalized = baseDirectory.replace(/[\/\\]+$/, ''); // Remove trailing slashes
-    const lastSegment = baseDirNormalized.split(/[\/\\]/).pop()?.toLowerCase() || '';
+    const baseDirNormalized = baseDirectory.replace(/[/\\]+$/, ''); // Remove trailing slashes
+    const lastSegment = baseDirNormalized.split(/[/\\]/).pop()?.toLowerCase() || '';
     const alreadyHasTypeDir = lastSegment === 'novels' || lastSegment === 'illustrations';
 
     const parts: string[] = [];
@@ -118,6 +151,7 @@ export class FileService implements IFileService {
     // Extract date information once for reuse
     // For byDownloadDate/byDownloadDay modes, use current date (download date)
     // For byDate/byDay modes, use creation date from metadata
+    // Dates are formatted in config.runtime.timezone (default Asia/Tokyo), not process TZ.
     const getDateParts = (useDownloadDate: boolean) => {
       const date = useDownloadDate
         ? new Date() // Use current date (download date)
@@ -126,11 +160,7 @@ export class FileService implements IFileService {
               ? new Date(metadata.date)
               : metadata.date
             : new Date()); // Fallback to current date if no metadata date
-      return {
-        year: date.getFullYear(),
-        month: String(date.getMonth() + 1).padStart(2, '0'),
-        day: String(date.getDate()).padStart(2, '0'),
-      };
+      return getDatePartsInTz(date, this.timeZone);
     };
 
     // Handle date-based organization modes (using creation date)

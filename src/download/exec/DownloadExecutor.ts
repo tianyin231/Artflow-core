@@ -5,6 +5,7 @@ import {
   type RecoveryDecision,
 } from '../recovery/ErrorRecovery';
 import { logger } from '../../logger';
+import { sleep } from '../../utils/timing';
 
 export interface ExecutionOptions<T, R> {
   items: T[];
@@ -79,7 +80,7 @@ export class DownloadExecutor {
             // retry/backoff
             const delayMs = decision.delayMs ?? 0;
             if (delayMs > 0) {
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              await sleep(delayMs);
             }
             attempt += 1;
             if (attempt > (decision.maxAttempts ?? maxAttempts)) {

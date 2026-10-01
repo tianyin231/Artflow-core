@@ -58,7 +58,7 @@ export class PixivAuth {
           client_id: this.credentials.clientId,
           client_secret: this.credentials.clientSecret,
           grant_type: 'refresh_token',
-          refresh_token: this.credentials.refreshToken,
+          refresh_token: this.credentials.refreshToken ?? '',
           include_policy: 'true',
         });
 

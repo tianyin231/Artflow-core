@@ -10,7 +10,8 @@ import { ConfigPathMigrator } from '../utils/config-path-migrator';
 import { getBestAvailableToken, isPlaceholderToken, saveTokenToStorage } from '../utils/token-manager';
 import { getConfigManager } from '../utils/config-manager';
 import { getConfigDirectory, getDefaultConfigPath as getSmartDefaultConfigPath } from '../utils/project-root';
-import { StandaloneConfig } from './types';
+import { ConfigLoadMode, StandaloneConfig } from './types';
+import { AuthRequiredError } from '../auth/AuthRequired';
 import { generateDefaultConfig } from './defaults';
 import { applyDefaults } from './path-resolution';
 import { applyEnvironmentOverrides, adjustProxyForEnvironment } from './environment';
@@ -23,11 +24,21 @@ import { validateConfig } from './validation';
  * Uses smart detection to find project root or falls back to user home directory
  */
 export function getConfigPath(configPath?: string): string {
-  // If explicitly provided or via environment variable, use it
-  if (configPath || process.env.PIXIV_DOWNLOADER_CONFIG) {
-    return resolve(
-      configPath ?? process.env.PIXIV_DOWNLOADER_CONFIG ?? getSmartDefaultConfigPath()
-    );
+  // Highest priority: explicit path
+  if (configPath) {
+    return resolve(configPath);
+  }
+  // Artflow: ARTFLOW_CONFIG points at a config file
+  if (process.env.ARTFLOW_CONFIG) {
+    return resolve(process.env.ARTFLOW_CONFIG);
+  }
+  // Legacy env
+  if (process.env.PIXIV_DOWNLOADER_CONFIG) {
+    return resolve(process.env.PIXIV_DOWNLOADER_CONFIG);
+  }
+  // Artflow: ARTFLOW_DATA_DIR keeps config out of ~/.pixivflow
+  if (process.env.ARTFLOW_DATA_DIR) {
+    return resolve(process.env.ARTFLOW_DATA_DIR, 'config', 'standalone.config.json');
   }
 
   // Otherwise, use ConfigManager with smart detection to find the first available config
@@ -49,11 +60,26 @@ export function getConfigPath(configPath?: string): string {
 }
 
 /**
- * Load configuration from file with environment variable support
+ * Load configuration from file with environment variable support.
+ *
  * @param configPath - Path to config file
- * @param skipValidation - If true, skip configuration validation (useful for login commands)
+ * @param options - `{ mode: 'lenient' | 'strict' }` or legacy `skipValidation` boolean.
+ *                  Default is **lenient** (structure only; refresh token not required).
+ *                  Pixiv auth is enforced later via assertPixivReady().
  */
-export function loadConfig(configPath?: string, skipValidation: boolean = false): StandaloneConfig {
+export function loadConfig(
+  configPath?: string,
+  options: boolean | { mode?: ConfigLoadMode; skipValidation?: boolean } = { mode: 'lenient' }
+): StandaloneConfig {
+  const legacySkip = typeof options === 'boolean' ? options : undefined;
+  const mode: ConfigLoadMode =
+    legacySkip === true
+      ? 'lenient'
+      : typeof options === 'object' && options.mode
+        ? options.mode
+        : 'lenient';
+  // legacy `true` meant skip all validation (login commands)
+  const skipValidation = legacySkip === true;
   let resolvedPath = getConfigPath(configPath);
 
   // If config file doesn't exist, try to find or create one
@@ -210,8 +236,11 @@ export function loadConfig(configPath?: string, skipValidation: boolean = false)
   // Validate configuration AFTER token has been potentially filled from unified storage
   // Pass the database path to validation so it can check unified storage if needed
   // Skip validation for login commands (they will create/update the config)
+  // Lenient mode validates structure but does NOT require a refresh token.
   if (!skipValidation) {
-    validateConfig(config, resolvedPath, config.storage?.databasePath);
+    validateConfig(config, resolvedPath, config.storage?.databasePath, {
+      requirePixivToken: mode === 'strict',
+    });
   }
 
   // Process placeholders (e.g., YESTERDAY)

@@ -1,5 +1,6 @@
 // Jest setup for PixivFlow tests.
-// Add global mocks here if needed in the future.
+// Network guard: block non-localhost outbound (G8).
+import './setup-network-guard';
 
 
 

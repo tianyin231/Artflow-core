@@ -7,6 +7,7 @@ import { PixivClient, PixivIllust, PixivNovel } from '../../pixiv/PixivClient';
 import { Database } from '../../storage/Database';
 import { FileService } from '../../download/FileService';
 import { StandaloneConfig, TargetConfig } from '../../config';
+import { setSleepFn } from '../../utils/timing';
 
 // Mock dependencies
 jest.mock('../../pixiv/PixivClient');
@@ -20,29 +21,20 @@ jest.mock('../../utils/language-detection', () => ({
   }),
 }));
 
-// Mock delay function to speed up tests
-jest.mock('node:timers/promises', () => ({
-  setTimeout: jest.fn().mockResolvedValue(undefined),
-}));
+// Mock delay function to speed up tests — must NOT mock setTimeout itself
+// because production code uses withTimeout() which relies on real setTimeout.
 
-// Mock global setTimeout to prevent hanging in tests
-// Use jest.useFakeTimers() to control timers in tests
 beforeAll(() => {
-  jest.useFakeTimers();
+  setSleepFn(async () => {});
 });
 
 afterAll(() => {
-  jest.useRealTimers();
+  setSleepFn(null);
 });
 
-// Mock setTimeout to execute immediately in tests
-jest.spyOn(global, 'setTimeout').mockImplementation((callback: Function, delay?: number) => {
-  // Execute callback immediately in tests to avoid delays
-  if (typeof callback === 'function') {
-    Promise.resolve().then(() => callback());
-  }
-  return {} as NodeJS.Timeout;
-});
+jest.mock('node:timers/promises', () => ({
+  setTimeout: jest.fn().mockResolvedValue(undefined),
+}));
 
 // Mock fs module
 jest.mock('node:fs', () => ({
@@ -131,6 +123,8 @@ describe('DownloadManager', () => {
       insertDownload: jest.fn(),
       isDownloaded: jest.fn().mockReturnValue(false),
       hasDownloaded: jest.fn().mockReturnValue(false),
+      hasFileHash: jest.fn().mockReturnValue(false),
+      updateFilePath: jest.fn().mockReturnValue(true),
       logExecution: jest.fn(),
     } as any;
 

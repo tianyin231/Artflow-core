@@ -15,12 +15,24 @@ export type {
   StorageConfig,
   SchedulerConfig,
   StandaloneConfig,
+  ConfigLoadMode,
 } from './config/types';
 
 // Export configuration functions
 export { loadConfig, getConfigPath } from './config/loader';
 export { generateDefaultConfig, DEFAULT_CONFIG } from './config/defaults';
-export { validateConfigFile, ConfigValidationError } from './config/validation';
+export { validateConfigFile, validateConfig, ConfigValidationError } from './config/validation';
 export { applyEnvironmentOverrides, adjustProxyForEnvironment, isRunningInDocker } from './config/environment';
 export { processConfigPlaceholders } from './config/placeholders';
 export { applyDefaults } from './config/path-resolution';
+
+// Auth readiness (Pixiv)
+export {
+  assertPixivReady,
+  AuthRequiredError,
+  authRequiredHttpBody,
+  isPlaceholderToken,
+} from './auth/AuthRequired';
+
+// Runtime helpers
+export { resolvePython } from './runtime/resolvePython';

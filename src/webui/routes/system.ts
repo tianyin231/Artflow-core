@@ -8,6 +8,7 @@ import { getConfigPath, loadConfig } from '../../config';
 import { withWorkflowDatabase } from '../../workflow/workflow-store';
 import { Database } from '../../storage/Database';
 import { isPlaceholderToken } from '../../utils/token-manager';
+import { resolvePython } from '../../runtime/resolvePython';
 
 const router = Router();
 
@@ -52,7 +53,7 @@ async function canWriteDirectory(path: string): Promise<boolean> {
 
 function checkVideoRenderPythonDeps(): { ok: true } | { ok: false; detail: string } {
   try {
-    execFileSync('python', [
+    execFileSync(resolvePython(), [
       '-c',
       'import numpy; import imageio_ffmpeg; import moviepy; import PIL; import proglog; print("OK")',
     ], {
