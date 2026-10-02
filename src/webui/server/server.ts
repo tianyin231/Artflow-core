@@ -60,7 +60,7 @@ export class WebUIServer {
 
   constructor(options: WebUIServerOptions = {}) {
     this.port = options.port || (process.env.PORT ? parseInt(process.env.PORT, 10) : PORTS.PROD_API);
-    this.host = options.host || 'localhost';
+    this.host = options.host || process.env.ARTFLOW_HOST || '127.0.0.1';
 
     // Initialize Express app
     this.app = express();

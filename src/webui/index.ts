@@ -7,7 +7,7 @@ import fs from 'fs';
 import { PORTS } from './ports';
 
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : PORTS.PROD_API;
-const host = process.env.HOST || 'localhost';
+const host = process.env.HOST || process.env.ARTFLOW_HOST || '127.0.0.1';
 
 /**
  * 自动检测静态文件路径
