@@ -103,7 +103,7 @@ describe('FileService', () => {
       await service.saveImage(buffer, 'test.jpg');
 
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        expect.stringContaining('/test/downloads'),
+        expect.stringContaining(join('/test', 'downloads')),
         expect.any(Buffer)
       );
     });
@@ -155,7 +155,7 @@ describe('FileService', () => {
       await service.saveText('content', 'test.txt');
 
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        expect.stringContaining('/test/downloads'),
+        expect.stringContaining(join('/test', 'downloads')),
         'content',
         'utf-8'
       );
@@ -292,7 +292,7 @@ describe('FileService', () => {
       const metadata: FileMetadata = { date: new Date('2023-06-15') };
       const result = fileService.getOrganizedDirectory('/base/illustrations', 'byDate', metadata, 'illustration');
       // Should not have duplicate 'illustrations' directory
-      const parts = result.split('/');
+      const parts = result.split(/[\\/]/);
       expect(parts.filter(p => p === 'illustrations').length).toBe(1);
     });
 
