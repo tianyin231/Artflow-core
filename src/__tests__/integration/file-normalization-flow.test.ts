@@ -13,13 +13,13 @@ import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 
 // Mock global setTimeout to prevent hanging in tests
-jest.useFakeTimers();
-jest.spyOn(global, 'setTimeout').mockImplementation((callback: Function, delay?: number) => {
-  // Execute callback immediately in tests to avoid delays
-  if (typeof callback === 'function') {
-    Promise.resolve().then(() => callback());
-  }
-  return {} as NodeJS.Timeout;
+import { setSleepFn } from '../../utils/timing';
+
+beforeAll(() => {
+  setSleepFn(async () => {});
+});
+afterAll(() => {
+  setSleepFn(null);
 });
 
 describe('FileNormalizationService Integration', () => {

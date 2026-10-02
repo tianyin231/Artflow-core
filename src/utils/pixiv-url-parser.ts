@@ -184,7 +184,7 @@ export function parsePixivUrl(url: string): ParsedPixivUrl | null {
  */
 function parseIdFromString(str: string): ParsedPixivUrl | null {
   // Try to find illust ID pattern: artworks/{id}
-  const illustMatch = str.match(/artworks[\/\s]+(\d+)/i);
+  const illustMatch = str.match(/artworks[/\s]+(\d+)/i);
   if (illustMatch) {
     const illustId = parseInt(illustMatch[1], 10);
     if (!isNaN(illustId)) {
@@ -196,7 +196,7 @@ function parseIdFromString(str: string): ParsedPixivUrl | null {
   }
 
   // Try to find novel ID pattern: novel/show.php?id={id} or novel/{id}
-  const novelMatch = str.match(/novel[\/\s]+(?:show\.php\?id=)?(\d+)/i);
+  const novelMatch = str.match(/novel[/\s]+(?:show\.php\?id=)?(\d+)/i);
   if (novelMatch) {
     const novelId = parseInt(novelMatch[1], 10);
     if (!isNaN(novelId)) {
@@ -208,7 +208,7 @@ function parseIdFromString(str: string): ParsedPixivUrl | null {
   }
 
   // Try to find series ID pattern: series/{id}
-  const seriesMatch = str.match(/series[\/\s]+(\d+)/i);
+  const seriesMatch = str.match(/series[/\s]+(\d+)/i);
   if (seriesMatch) {
     const seriesId = parseInt(seriesMatch[1], 10);
     if (!isNaN(seriesId)) {
@@ -220,7 +220,7 @@ function parseIdFromString(str: string): ParsedPixivUrl | null {
   }
 
   // Try to find user ID pattern: users/{id}
-  const userMatch = str.match(/users[\/\s]+(\d+)/i);
+  const userMatch = str.match(/users[/\s]+(\d+)/i);
   if (userMatch) {
     const userId = userMatch[1];
     if (userId) {

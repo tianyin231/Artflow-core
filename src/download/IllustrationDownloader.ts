@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getErrorMessage } from '../utils/errors';
+import { withTimeout } from '../utils/timing';
 
 /**
  * Service for downloading illustrations
@@ -33,12 +34,11 @@ export class IllustrationDownloader {
       logger.info(`Found existing files for illustration ${illust.id} but missing database record. Updating database...`);
       
       // Get illustration detail with tags to get full information
-      const { illust: detail, tags } = await Promise.race([
+      const { illust: detail, tags } = await withTimeout(
         this.client.getIllustDetailWithTags(illust.id),
-        new Promise<{ illust: PixivIllust; tags: Array<{ name: string; translated_name?: string }> }>((_, reject) => 
-          setTimeout(() => reject(new Error(`Timeout: Failed to get illustration detail for ${illust.id} within 60 seconds`)), 60000)
-        )
-      ]);
+        60000,
+        `Timeout: Failed to get illustration detail for ${illust.id} within 60 seconds`
+      );
       
       // Insert database records for existing files
       let recordedExistingFiles = 0;
@@ -74,12 +74,11 @@ export class IllustrationDownloader {
     }
     
     // Add timeout protection for getIllustDetailWithTags to prevent hanging
-    const { illust: detail, tags } = await Promise.race([
+    const { illust: detail, tags } = await withTimeout(
       this.client.getIllustDetailWithTags(illust.id),
-      new Promise<{ illust: PixivIllust; tags: Array<{ name: string; translated_name?: string }> }>((_, reject) => 
-        setTimeout(() => reject(new Error(`Timeout: Failed to get illustration detail for ${illust.id} within 60 seconds`)), 60000)
-      )
-    ]);
+      60000,
+      `Timeout: Failed to get illustration detail for ${illust.id} within 60 seconds`
+    );
     const pages = this.getIllustrationPages(detail);
 
     // Use parallel download for multiple pages to improve performance
@@ -110,12 +109,11 @@ export class IllustrationDownloader {
         };
 
         // Add timeout protection for image download (2 minutes per image)
-        const buffer = await Promise.race([
+        const buffer = await withTimeout(
           this.client.downloadImage(originalUrl),
-          new Promise<ArrayBuffer>((_, reject) => 
-            setTimeout(() => reject(new Error(`Timeout: Failed to download image for illustration ${detail.id} page ${index + 1} within 120 seconds`)), 120000)
-          )
-        ]);
+          120000,
+          `Timeout: Failed to download image for illustration ${detail.id} page ${index + 1} within 120 seconds`
+        );
         const fileHash = this.calculateHash(buffer);
         if (seenHashes.has(fileHash) || this.database.hasFileHash(fileHash)) {
           logger.info(`Skipped duplicate image content for illustration ${detail.id} page ${index + 1}`, {
@@ -165,9 +163,14 @@ export class IllustrationDownloader {
 
     // Insert download records and log results
     let successCount = 0;
+    let duplicateCount = 0;
     for (const result of downloadResults) {
       if (result.success) {
-        if (result.result.duplicate || !result.result.filePath) {
+        if (result.result.duplicate) {
+          duplicateCount++;
+          continue;
+        }
+        if (!result.result.filePath) {
           continue;
         }
 
@@ -201,8 +204,13 @@ export class IllustrationDownloader {
       }
     }
 
-    if (successCount === 0) {
+    if (successCount === 0 && duplicateCount === 0) {
       throw new Error(`Failed to download any pages for illustration ${detail.id}`);
+    }
+    if (successCount === 0 && duplicateCount > 0) {
+      logger.info(
+        `All ${duplicateCount} page(s) for illustration ${detail.id} already present (duplicate hash); treating as success`
+      );
     }
   }
 

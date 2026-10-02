@@ -129,11 +129,32 @@ export interface TargetConfig {
   detectLanguage?: boolean;
 }
 
+/**
+ * How strictly to validate on load.
+ * - lenient: structure only; refresh token NOT required
+ * - strict: full validation including refresh token (legacy behavior)
+ */
+export type ConfigLoadMode = 'lenient' | 'strict';
+
 export interface PixivCredentialConfig {
+  /**
+   * Pixiv provider backend: 'pixiv-cli' | 'mcp' | 'legacy' | 'fixture'
+   * Default: 'pixiv-cli'
+   */
+  provider?: 'pixiv-cli' | 'mcp' | 'legacy' | 'fixture';
+  /**
+   * Path to pixiv-cli binary (pixiv-cli provider)
+   */
+  cliPath?: string;
+  /**
+   * HOME override for pixiv-cli state (~/.pixiv-cli). null = use process.env.HOME
+   */
+  cliHome?: string | null;
   clientId: string;
   clientSecret: string;
   deviceToken: string;
-  refreshToken: string;
+  /** May be empty/placeholder in lenient mode until the user logs in. */
+  refreshToken?: string;
   userAgent: string;
 }
 
@@ -284,6 +305,21 @@ export interface StandaloneConfig {
    * Default: 0 (no delay)
    */
   initialDelay?: number;
+  /**
+   * Runtime configuration (Artflow overhaul)
+   */
+  runtime?: {
+    /** Python executable; null means auto-detect via resolvePython() */
+    python?: string | null;
+    /** Offline fixture mode: fixture Pixiv + mock publishers + fast renderer */
+    fixtureMode?: boolean;
+    /** IANA timezone used for date-based directory organization (Pixiv date口径) */
+    timezone?: string;
+  };
+  /**
+   * Pixiv provider selection
+   */
+  pixivProvider?: 'pixiv-cli' | 'mcp' | 'legacy' | 'fixture';
   /**
    * Download configuration
    */

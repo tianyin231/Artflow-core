@@ -14,14 +14,15 @@ import { join } from 'node:path';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 
-// Mock global setTimeout to prevent hanging in tests
-jest.useFakeTimers();
-jest.spyOn(global, 'setTimeout').mockImplementation((callback: Function, delay?: number) => {
-  // Execute callback immediately in tests to avoid delays
-  if (typeof callback === 'function') {
-    Promise.resolve().then(() => callback());
-  }
-  return {} as NodeJS.Timeout;
+// Speed up intentional delays without breaking withTimeout() races.
+import { setSleepFn } from '../../utils/timing';
+
+beforeAll(() => {
+  setSleepFn(async () => {});
+});
+
+afterAll(() => {
+  setSleepFn(null);
 });
 
 // Mock PixivAuth
@@ -195,7 +196,10 @@ describe('DownloadManager Integration', () => {
         });
       });
 
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
 
       // Mock file service methods
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
@@ -252,7 +256,10 @@ describe('DownloadManager Integration', () => {
         });
       });
 
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
       jest.spyOn(fileService, 'saveMetadata').mockResolvedValue(join(testDir, 'test.json'));
 
@@ -294,7 +301,10 @@ describe('DownloadManager Integration', () => {
         tags: [],
       });
       
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
       jest.spyOn(fileService, 'saveMetadata').mockResolvedValue(join(testDir, 'test.json'));
 
@@ -373,7 +383,10 @@ describe('DownloadManager Integration', () => {
         });
       });
 
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
       jest.spyOn(fileService, 'saveMetadata').mockResolvedValue(join(testDir, 'test.json'));
 
@@ -420,7 +433,10 @@ describe('DownloadManager Integration', () => {
         });
       });
 
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
       jest.spyOn(fileService, 'saveMetadata').mockResolvedValue(join(testDir, 'test.json'));
 
@@ -464,7 +480,10 @@ describe('DownloadManager Integration', () => {
         });
       });
 
-      mockClient.downloadImage.mockResolvedValue(new ArrayBuffer(100));
+      mockClient.downloadImage.mockImplementation(async (url: string) => {
+        const enc = new TextEncoder().encode(url);
+        return enc.buffer as ArrayBuffer;
+      });
       jest.spyOn(fileService, 'saveImage').mockResolvedValue(join(testDir, 'test.jpg'));
       jest.spyOn(fileService, 'saveMetadata').mockResolvedValue(join(testDir, 'test.json'));
 

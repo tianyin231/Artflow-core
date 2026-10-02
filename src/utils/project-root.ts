@@ -268,6 +268,14 @@ export function getConfigDirectory(explicitConfigDir?: string): string {
     return resolve(explicitConfigDir);
   }
 
+  // Artflow: ARTFLOW_DATA_DIR isolates config from ~/.pixivflow (tests / fixture mode)
+  if (process.env.ARTFLOW_DATA_DIR) {
+    return join(process.env.ARTFLOW_DATA_DIR, 'config');
+  }
+  if (process.env.ARTFLOW_CONFIG) {
+    return dirname(resolve(process.env.ARTFLOW_CONFIG));
+  }
+
   // Priority 2: Check if current working directory is a valid project root (deployment)
   // This handles the case: git clone ~/pixivflow && cd ~/pixivflow && pixivflow webui
   if (!isDevelopmentDirectory(process.cwd())) {
