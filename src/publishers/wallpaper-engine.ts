@@ -77,6 +77,7 @@ export class WallpaperEnginePackagePublisher implements Publisher {
     if (opts.dryRun) {
       return { status: 'dry_run', exportDir: dir, message: 'WE package dry-run' };
     }
+    if (!existsSync(pkg.videoPath) || !existsSync(pkg.coverPath)) return { status: 'failed', message: 'video or cover file not found' };
     mkdirSync(dir, { recursive: true });
     const videoName = 'video.mp4';
     const previewName = 'preview.jpg';

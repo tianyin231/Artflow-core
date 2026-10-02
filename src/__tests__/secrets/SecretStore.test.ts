@@ -32,7 +32,9 @@ describe('SecretStore', () => {
     const keyFile = join(dir, 'secret.key');
     new SecretStore(undefined, keyFile);
     const mode = statSync(keyFile).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // Windows uses ACLs instead of POSIX group/other permission bits.
+    if (process.platform !== 'win32') expect(mode).toBe(0o600);
+    expect(Buffer.from(readFileSync(keyFile, 'utf8'), 'base64')).toHaveLength(32);
   });
 
   it('peek never returns plaintext', () => {
