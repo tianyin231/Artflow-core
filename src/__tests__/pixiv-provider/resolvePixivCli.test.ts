@@ -24,7 +24,7 @@ describe('resolvePixivCli', () => {
 
   it('detects bare commands on PATH and explicit paths', () => {
     const dir = mkdtempSync(join(tmpdir(), 'artflow-pixivcli-'));
-    const bin = join(dir, 'pixiv');
+    const bin = join(dir, process.platform === 'win32' ? 'pixiv.EXE' : 'pixiv');
     writeFileSync(bin, '#!/bin/sh\nexit 0\n');
     chmodSync(bin, 0o755);
     expect(isPixivCliAvailable('pixiv', { PATH: dir })).toBe(true);
