@@ -51,7 +51,7 @@ const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 export class WorkflowManager {
   private tasks = new Map<string, WorkflowTask>();
-  private readonly workflowConfigPath = resolve(process.cwd(), 'config', 'standalone.config.json');
+  private readonly workflowConfigPath = getConfigPath();
   private restored = false;
 
   public createTask(request: CreateWorkflowTaskRequest): WorkflowTask {
@@ -619,7 +619,7 @@ export class WorkflowManager {
       database.migrate();
       const auth = new PixivAuth(config.pixiv, config.network!, database, this.workflowConfigPath);
       const pixivClient = new PixivClient(auth, config);
-      const fileService = new FileService(config.storage!);
+      const fileService = new FileService(config.storage!, config.runtime?.timezone);
       const downloadManager = new DownloadManager(config, pixivClient, database, fileService);
       downloadManager.setProgressCallback((current, total, message) => {
         this.syncDownloadedAssets(task, config, before, total);
@@ -1089,15 +1089,15 @@ export class WorkflowManager {
 
   private createWorkflowFileService(): FileService {
     const config = loadConfig(this.workflowConfigPath);
-    return new FileService(config.storage ?? {});
+    return new FileService(config.storage ?? {}, config.runtime?.timezone);
   }
 
   private async readPixivMetadata(path: string, workflowConfig: StandaloneConfig): Promise<PixivMetadata | null> {
-    const workflowMetadata = await new FileService(workflowConfig.storage ?? {}).readMetadata(path);
+    const workflowMetadata = await new FileService(workflowConfig.storage ?? {}, workflowConfig.runtime?.timezone).readMetadata(path);
     if (workflowMetadata) return workflowMetadata;
 
     const globalConfig = loadConfig(this.workflowConfigPath);
-    const globalMetadata = await new FileService(globalConfig.storage ?? {}).readMetadata(path);
+    const globalMetadata = await new FileService(globalConfig.storage ?? {}, globalConfig.runtime?.timezone).readMetadata(path);
     if (globalMetadata) return globalMetadata;
 
     const pixivId = this.extractPixivIdFromPath(path);
@@ -1145,7 +1145,7 @@ export class WorkflowManager {
   }
 
   private async identifyImage(path: string): Promise<{ width: number; height: number }> {
-    const { stdout } = await execFileAsync(resolvePython(), [
+    const { stdout } = await execFileAsync(resolvePython({ configured: loadConfig(this.workflowConfigPath).runtime?.python }), [
       '-c',
       'from PIL import Image; import sys; img=Image.open(sys.argv[1]); print(f"{img.width},{img.height}")',
       path,
@@ -1170,7 +1170,7 @@ export class WorkflowManager {
     const coverPath = join(outputDir, `${task.id}-cover-${Date.now()}.jpg`);
     const title = (titleOverride?.trim() || task.plan.title).replace(/"/g, '\\"');
     const safeLayout = ['grid', 'single', 'hero_left', 'hero_top', 'strip'].includes(layout) ? layout : 'grid';
-    await execFileAsync(resolvePython(), [
+    await execFileAsync(resolvePython({ configured: loadConfig(this.workflowConfigPath).runtime?.python }), [
       '-c',
       [
         'from PIL import Image, ImageDraw, ImageFont, ImageFilter',
@@ -1307,7 +1307,7 @@ export class WorkflowManager {
 
     const scriptPath = resolve(process.cwd(), 'scripts', 'workflow-render-video.py');
     await new Promise<void>((resolvePromise, reject) => {
-      const child = spawn(resolvePython(), [scriptPath, renderConfigPath], {
+      const child = spawn(resolvePython({ configured: loadConfig(this.workflowConfigPath).runtime?.python }), [scriptPath, renderConfigPath], {
         cwd: process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
