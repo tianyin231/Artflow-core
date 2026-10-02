@@ -4,6 +4,7 @@
 import { mkdtempSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { FixturePixivProvider } from '../../pixiv-provider/FixturePixivProvider';
 import { PixivMcpProvider } from '../../pixiv-provider/PixivMcpProvider';
 
 const FAKE_MCP = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv-mcp.cjs');
@@ -11,7 +12,8 @@ const FAKE_MCP = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv-
 function makeProvider(env: Record<string, string> = {}) {
   chmodSync(FAKE_MCP, 0o755);
   return new PixivMcpProvider({
-    command: 'node',
+    command: process.execPath,
+    authStatus: () => new FixturePixivProvider().authStatus(),
     args: [FAKE_MCP],
     env,
     idleTimeoutMs: 50,
@@ -60,7 +62,7 @@ describe('PixivMcpProvider', () => {
 
   it('idle timeout disposes process', async () => {
     const p = makeProvider();
-    await p.authStatus();
+    await p.detail('80001');
     await new Promise((r) => setTimeout(r, 80));
     // after dispose, new call should start fresh or throw disposed
     try {
@@ -73,7 +75,7 @@ describe('PixivMcpProvider', () => {
 
   it('crash scenario rejects pending calls', async () => {
     const p = makeProvider({ FAKE_PIXIV_MCP_SCENARIO: 'crash' });
-    await expect(p.authStatus()).resolves.toEqual({ authenticated: false, accounts: [] });
+    await expect(p.detail('80001')).rejects.toThrow(/exited/);
     await p.dispose();
   });
 });

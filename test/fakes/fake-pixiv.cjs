@@ -39,7 +39,7 @@ function handleAuth() {
     return true;
   }
   if (sub === 'list') {
-    out([{ userId: '1', name: 'Fake User', isDefault: true }]);
+    out({ default_user_id: 1, accounts: [{ user_id: 1, username: 'Fake User', default: true, has_token: true }] });
     return true;
   }
   if (sub === 'use') {
@@ -54,6 +54,7 @@ function handleAuth() {
 }
 
 function handleQuery() {
+  if (cmd === 'user' && args[1] !== 'artworks') fail(1, 'expected user artworks');
   const n = scenario === 'partial' ? 2 : 5;
   const limitIdx = args.indexOf('--limit');
   const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : n;
@@ -69,20 +70,20 @@ function handleQuery() {
         id: String(90000 + i),
         type: 'illust',
         title: `Fake ${i}`,
-        userId: '42',
-        userName: 'Fake Author',
+        user: { id: 42, name: 'Fake Author' },
+
         tags: ['fake', 'test'],
-        createDate: '2025-06-15T00:00:00+09:00',
-        bookmarkCount: bm,
-        viewCount: 1000 * i,
-        pageCount: 1,
-        xRestrict: 0,
+        published_at: '2025-06-15T00:00:00+09:00',
+        total_bookmarks: bm,
+        total_views: 1000 * i,
+        page_count: 1,
+        x_restrict: 0,
         url: `https://www.pixiv.net/artworks/${90000 + i}`,
       })
     );
   }
   if (args.includes('--json') && cmd !== 'search') {
-    out(lines.map((l) => JSON.parse(l)));
+    process.stdout.write(JSON.stringify({ illusts: lines.map((l) => JSON.parse(l)) }, null, 2));
   } else {
     process.stdout.write(lines.join('\n') + '\n');
   }
@@ -99,6 +100,7 @@ function handleDownload() {
   process.stdin.on('end', () => {
     const items = input.split('\n').filter(Boolean).map((l) => JSON.parse(l));
     for (const item of items) {
+      if (!item.type || !item.url) fail(1, 'canonical record requires type and url');
       const file = path.join(pathArg, `${item.id}_p0.png`);
       fs.writeFileSync(
         file,
@@ -129,7 +131,7 @@ function main() {
   }
 
   if (cmd === 'auth' && handleAuth()) return;
-  if (cmd === 'search' || cmd === 'ranking' || cmd === 'user' || cmd === 'bookmark') {
+  if (cmd === 'search' || cmd === 'ranking' || cmd === 'user' || cmd === 'bookmark' || cmd === 'recommended') {
     handleQuery();
     return;
   }
@@ -137,7 +139,7 @@ function main() {
     handleDownload();
     return;
   }
-  if (cmd === 'illust') {
+  if (cmd === 'detail') {
     out({
       id: args[1],
       type: 'illust',
@@ -145,9 +147,9 @@ function main() {
       userId: '42',
       userName: 'Fake Author',
       tags: ['fake'],
-      createDate: '2025-06-15T00:00:00+09:00',
-      bookmarkCount: 50,
-      pageCount: 1,
+      published_at: '2025-06-15T00:00:00+09:00',
+      total_bookmarks: 50,
+      page_count: 1,
       url: `https://www.pixiv.net/artworks/${args[1]}`,
     });
     return;

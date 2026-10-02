@@ -37,7 +37,7 @@ export class SchedulerCommand extends BaseCommand {
 
       const auth = new PixivAuth(config.pixiv, config.network!, database, configPath);
       const pixivClient = new PixivClient(auth, config);
-      const fileService = new FileService(config.storage!);
+      const fileService = new FileService(config.storage!, config.runtime?.timezone);
       const downloadManager = new DownloadManager(config, pixivClient, database, fileService);
 
       await downloadManager.initialise();

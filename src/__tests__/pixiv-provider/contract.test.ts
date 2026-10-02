@@ -9,7 +9,7 @@ import { FixturePixivProvider } from '../../pixiv-provider/FixturePixivProvider'
 import { PixivCliProvider } from '../../pixiv-provider/PixivCliProvider';
 import { PixivProvider, PixivProviderError, WorkQuery } from '../../pixiv-provider/types';
 
-const FAKE_PIXIV = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv');
+const FAKE_PIXIV = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv.cjs');
 
 async function collect(provider: PixivProvider, q: WorkQuery) {
   const out = [];
@@ -24,7 +24,7 @@ function makeCli(scenario: string, home: string) {
   process.env.FAKE_PIXIV_SCENARIO = scenario;
   process.env.FAKE_PIXIV_ARGV_LOG = argvLog;
   return {
-    provider: new PixivCliProvider({ cliPath: FAKE_PIXIV, cliHome: home, timeoutMs: 5000 }),
+    provider: new PixivCliProvider({ cliPath: process.execPath, args: [FAKE_PIXIV], cliHome: home, timeoutMs: 5000 }),
     argvLog,
   };
 }
@@ -51,6 +51,7 @@ describe.each([
   it('search returns works', async () => {
     const works = await collect(provider, { kind: 'search', word: '', limit: 5 });
     expect(works.length).toBeGreaterThan(0);
+    expect(works.every((w) => /^\d+$/.test(w.id) && Boolean(w.authorId))).toBe(true);
   });
 
   it('search respects limit', async () => {
