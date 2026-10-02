@@ -85,7 +85,12 @@
     "lint:strict": "eslint \"src/**/*.ts\" --max-warnings 0",
     "test:slow": "jest --runInBand --testMatch \"**/*slow.ts\" --testTimeout 180000",
     "test:fixture": "ARTFLOW_FIXTURE_MODE=1 jest src/__tests__/pixiv-provider src/__tests__/renderer",
-    "eval:ai": "node scripts/eval-ai.mjs"
+    "eval:ai": "node scripts/eval-ai.mjs",
+    "dev:stack": "bash scripts/dev/dev-stack.sh",
+    "dev:stack:fixture": "bash scripts/dev/dev-stack.sh --fixture",
+    "verify:all": "bash scripts/dev/verify-all.sh",
+    "scan:secrets": "node scripts/dev/scan-secrets.mjs",
+    "validate:compose": "node scripts/dev/validate-compose.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
