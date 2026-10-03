@@ -34,20 +34,15 @@ function makePkg(over: Partial<PublishPackage> = {}): PublishPackage {
     durationSec: 10,
     sizeBytes: 1000,
     sources: [{ pixivId: '1', author: 'a', url: 'https://x' }],
+    extras: { tid: 21 },
     ...over,
   };
 }
 
 describe('bilibiliSign', () => {
   it('matches fixed HMAC vector', () => {
-    // Deterministic: params sorted, secret fixed
-    const sig = bilibiliSign({ b: '2', a: '1' }, 'secret', 1700000000);
-    expect(sig).toBe(
-      require('node:crypto')
-        .createHmac('sha256', 'secret')
-        .update('a=1&b=2&timestamp=1700000000')
-        .digest('hex')
-    );
+    const sig = bilibiliSign({ 'x-bili-b': '2', 'x-bili-a': '1', 'access-token': 'excluded' }, 'secret');
+    expect(sig).toBe('51fe6a96d6b8c6aa151db7285f863c1d37e44a9ebcc4fa8a7dbb6e3cc96683e5');
   });
 });
 
@@ -118,6 +113,8 @@ describe('PublisherRegistry + PublishJobService', () => {
     expect(r1.status).toBe('dry_run');
     expect(r2.status).toBe('dry_run');
     expect(svc.get('t1', 'local-export')!.attempts).toBe(1);
+    expect((await svc.run(pkg, 'local-export', { dryRun: false })).status).toBe('exported');
+    expect(svc.get('t1', 'local-export')!.attempts).toBe(2);
   });
 
   it('retry after failure works', async () => {

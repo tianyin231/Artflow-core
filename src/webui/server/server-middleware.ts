@@ -2,6 +2,7 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { logger } from '../../logger';
 import { WebUIServerOptions } from './types';
+import { observeHttp } from '../routes/metrics';
 
 const QUIET_SUCCESS_GET_PATHS = new Set([
   '/api/auth/status',
@@ -41,6 +42,11 @@ function shouldLogRequest(req: Request, statusCode: number, durationMs: number):
  * Setup middleware for Express app
  */
 export function setupMiddleware(app: Express, options: WebUIServerOptions): void {
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.once('finish', () => observeHttp(res.statusCode < 400));
+    next();
+  });
+
   // JSON and URL-encoded body parsing
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));

@@ -776,6 +776,15 @@ router.get('/tasks/:taskId/video', (req: Request, res: Response) => {
   res.sendFile(task.videoPath);
 });
 
+router.get('/tasks/:taskId/subtitles', (req: Request, res: Response) => {
+  const task = workflowManager.getTask(req.params.taskId);
+  if (!task?.subtitlePath || !existsSync(task.subtitlePath)) {
+    res.status(404).json({ error: 'Subtitles not found' });
+    return;
+  }
+  res.download(task.subtitlePath);
+});
+
 router.get('/tasks/:taskId/cover', (req: Request, res: Response) => {
   try {
     const coverPath = workflowManager.getCoverPath(req.params.taskId);

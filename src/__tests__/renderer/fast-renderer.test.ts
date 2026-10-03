@@ -1,7 +1,7 @@
 /**
  * FastRenderer + mock-servers tests (M3).
  */
-import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -21,7 +21,7 @@ function makeTinyPng(path: string): void {
 }
 
 describe('FastRenderer', () => {
-  it('produces an mp4 under 5 seconds', async () => {
+  it('keeps the final image duration and requested frame rate', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'artflow-render-'));
     const images: string[] = [];
     for (let i = 0; i < 3; i++) {
@@ -30,7 +30,7 @@ describe('FastRenderer', () => {
       images.push(p);
     }
     const renderer = new FastRenderer();
-    const out = await renderer.render({ images }, { secondsPerImage: 0.5 }, tmp);
+    const out = await renderer.render({ images }, { secondsPerImage: 0.5, fps: 12 }, tmp);
     expect(existsSync(out.videoPath)).toBe(true);
     expect(out.durationSec).toBeLessThanOrEqual(5);
 
@@ -41,9 +41,19 @@ describe('FastRenderer', () => {
       { encoding: 'utf8' }
     );
     const dur = Number(probe.trim());
-    expect(dur).toBeGreaterThan(0);
-    expect(dur).toBeLessThanOrEqual(5.5);
+    expect(Math.abs(dur - 1.5)).toBeLessThanOrEqual(1 / 12);
+    expect(out.durationSec).toBe(dur);
+    expect(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', '-of', 'csv=p=0', out.videoPath], { encoding: 'utf8' }).trim()).toBe('12/1');
+    rmSync(tmp, { recursive: true, force: true });
   }, 30000);
+
+  it('rejects invalid timing before starting ffmpeg', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'artflow-render-'));
+    const image = join(tmp, 'image.png');
+    makeTinyPng(image);
+    await expect(new FastRenderer().render({ images: [image] }, { secondsPerImage: NaN }, tmp)).rejects.toThrow('secondsPerImage');
+    rmSync(tmp, { recursive: true, force: true });
+  });
 });
 
 describe('mock-servers', () => {

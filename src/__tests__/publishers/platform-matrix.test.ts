@@ -29,6 +29,7 @@ function pkg(over: Partial<PublishPackage> = {}): PublishPackage {
     durationSec: 30,
     sizeBytes: 1024,
     sources: [],
+    extras: { tid: 21 },
     ...over,
   };
 }

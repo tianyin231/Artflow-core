@@ -79,6 +79,9 @@ export function validateCommon(pkg: PublishPackage, caps: PublisherCapabilities)
   if (caps.maxSizeBytes && pkg.sizeBytes > caps.maxSizeBytes) {
     issues.push({ field: 'sizeBytes', message: `file exceeds ${caps.maxSizeBytes} bytes` });
   }
+  if (caps.maxDurationSec && pkg.durationSec > caps.maxDurationSec) {
+    issues.push({ field: 'durationSec', message: `duration exceeds ${caps.maxDurationSec} seconds` });
+  }
   if (caps.aspectRatios && !caps.aspectRatios.includes(pkg.aspectRatio)) {
     issues.push({ field: 'aspectRatio', message: `unsupported aspect ${pkg.aspectRatio}` });
   }
