@@ -164,7 +164,7 @@ pixiv-cli 的登录状态默认保存在 `~/.pixiv-cli`，可用 `PIXIV_CLI_HOME
 ```bash
 npm run build            # tsc
 npm run lint             # eslint
-npm test                 # Jest 单元/集成测试；隔离 worker 避免 Node 24 原生 SQLite 状态相互影响
+npm test                 # Jest 单元/集成测试；使用隔离 worker 运行原生 SQLite 测试
 node --test scripts/dev/__tests__/tooling.test.mjs  # 启动、清理、就绪、验证及扫描回归
 npm run test:fixture     # 只跑 provider / renderer 的 fixture 测试
 npm run test:slow        # 慢测试（真实 moviepy 渲染，需要 Python + moviepy + ffmpeg）
@@ -180,7 +180,7 @@ npm run eval:ai          # AI 规划离线评测
 
 | 命令 | 说明 |
 |---|---|
-| `npm run dev:stack` / `dev:stack:fixture` | 启动 core + studio（fixture 另加 mock；`--prod` 用生产构建 + `vite preview`）；端口冲突或任一进程失败立即退出并清理进程组 |
+| `npm run dev:stack` / `dev:stack:fixture` | 启动 mock + core + studio（fixture 使用离线配置；`--prod` 用生产构建 + `vite preview`）；端口冲突或任一进程失败立即退出并清理进程组 |
 | `npm run verify:all` | core/studio 构建、lint、测试（UTC + Asia/Shanghai）、工具回归、compose 校验、E2E、AI 评测、i18n、哨兵扫描；各步骤日志和汇总在 `.artflow-dev/verify/`，任一步失败则整体失败 |
 | `npm run scan:secrets` | 扫描两份 checkout、日志、报告与 git 历史中的已知测试哨兵值；不是通用凭据扫描器，扫描失败也会报错 |
 | `npm run validate:compose` | 解析 compose YAML 并检查 API 构建输入；不替代真实镜像构建，也不校验未完成的 Studio 镜像 |
