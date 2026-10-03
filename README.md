@@ -8,7 +8,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.14%2B-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
 
 </div>
 
@@ -61,7 +61,7 @@ Artflow-core  ──  WebUI API (express, 默认 127.0.0.1)
 
 ### 环境要求
 
-- **Node.js 22.12+**（推荐 22.x / 24.x LTS）和 **npm 9+**。Studio 的 Vite 7 也支持 Node 20.19+（20.x），完整工具链不能使用 Node 18。
+- **Node.js 22.14+（22.x）或 23.6+**（推荐 22.x / 24.x LTS）和 **npm 9+**。SQLite 原生模块需要 Node-API 10，完整工具链不支持 Node 18/20；Studio 独立运行 Vite 7 时也可使用 Node 20.19+。
 - **[pixiv-cli](#安装-pixiv-cli)**（真实抓取 Pixiv 时需要；离线 fixture 模式不需要）
 - **ffmpeg**（视频合成）
 - **Python 3 + moviepy**（工作流视频合成需要；仅启动 API 或素材审核可不安装）。建议使用虚拟环境，见下方命令；fast 库不会自动替代工作流的 MoviePy 渲染器。
