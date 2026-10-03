@@ -3,140 +3,180 @@
     "command": "鳴潮 收藏数100+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "鳴潮",
+      "minBookmarks": 100
     }
   },
   {
     "command": "原神 收藏数150+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原神",
+      "minBookmarks": 150
     }
   },
   {
     "command": "初音ミク 收藏数200+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "初音ミク",
+      "minBookmarks": 200
     }
   },
   {
     "command": "风景 收藏数250+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "风景",
+      "minBookmarks": 250
     }
   },
   {
     "command": "原创 收藏数300+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原创",
+      "minBookmarks": 300
     }
   },
   {
     "command": "Anime 收藏数350+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "Anime",
+      "minBookmarks": 350
     }
   },
   {
     "command": "Game 收藏数400+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "Game",
+      "minBookmarks": 400
     }
   },
   {
     "command": "鳴潮 收藏数450+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "鳴潮",
+      "minBookmarks": 450
     }
   },
   {
     "command": "原神 收藏数500+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原神",
+      "minBookmarks": 500
     }
   },
   {
     "command": "初音ミク 收藏数550+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "初音ミク",
+      "minBookmarks": 550
     }
   },
   {
     "command": "风景 收藏数600+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "风景",
+      "minBookmarks": 600
     }
   },
   {
     "command": "原创 收藏数650+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原创",
+      "minBookmarks": 650
     }
   },
   {
     "command": "Anime 收藏数700+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "Anime",
+      "minBookmarks": 700
     }
   },
   {
     "command": "Game 收藏数750+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "Game",
+      "minBookmarks": 750
     }
   },
   {
     "command": "鳴潮 收藏数800+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "鳴潮",
+      "minBookmarks": 800
     }
   },
   {
     "command": "原神 收藏数850+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原神",
+      "minBookmarks": 850
     }
   },
   {
     "command": "初音ミク 收藏数900+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "初音ミク",
+      "minBookmarks": 900
     }
   },
   {
     "command": "风景 收藏数950+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "风景",
+      "minBookmarks": 950
     }
   },
   {
     "command": "原创 收藏数1000+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "原创",
+      "minBookmarks": 1000
     }
   },
   {
     "command": "Anime 收藏数1050+ 卡点视频",
     "expect": {
       "tagPresent": true,
-      "hasTitle": true
+      "hasTitle": true,
+      "tag": "Anime",
+      "minBookmarks": 1050
     }
   }
 ]

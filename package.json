@@ -20,6 +20,7 @@
     "prepublishOnly": "npm run build",
     "build": "tsc && node scripts/create-webui-package-json.js",
     "build:watch": "tsc --watch",
+    "test:native": "npm run build && node --test scripts/dev/__tests__/native-runtime.test.mjs",
     "start": "npm run build && node dist/index.js",
     "login": "./scripts/login.sh",
     "login:headless": "npm run build && node dist/index.js login-headless",
@@ -85,7 +86,7 @@
     "lint:strict": "eslint \"src/**/*.ts\" --max-warnings 0",
     "test:slow": "jest --runInBand --testMatch \"**/*slow.ts\" --testTimeout 180000",
     "test:fixture": "ARTFLOW_FIXTURE_MODE=1 jest src/__tests__/pixiv-provider src/__tests__/renderer",
-    "eval:ai": "node scripts/eval-ai.mjs",
+    "eval:ai": "npm run build && node scripts/eval-ai.mjs",
     "dev:stack": "bash scripts/dev/dev-stack.sh",
     "dev:stack:fixture": "bash scripts/dev/dev-stack.sh --fixture",
     "verify:all": "bash scripts/dev/verify-all.sh",
@@ -117,7 +118,7 @@
   },
   "dependencies": {
     "axios": "^1.13.2",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "franc-min": "^6.2.0",
@@ -129,7 +130,7 @@
     "undici": "^6.19.8"
   },
   "engines": {
-    "node": "^18.14.0 || ^20.0.0 || ^22.0.0 || ^23.0.0 || >=24.0.0",
+    "node": "^22.14.0 || >=23.6.0",
     "npm": ">=9.0.0"
   },
   "overrides": {
@@ -137,6 +138,8 @@
   },
   "files": [
     "dist/",
+    "scripts/workflow-*.py",
+    "requirements-python.txt",
     "config/standalone.config.example.json",
     "README.md",
     "README_EN.md",

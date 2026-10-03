@@ -1,6 +1,7 @@
 /**
  * Remaining publishers: youtube, telegram, steam-workshop, douyin, xiaohongshu, discord-webhook.
  */
+import { open, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -51,40 +52,48 @@ export class YouTubePublisher implements Publisher {
     const v = this.validate(pkg);
     if (!v.ok) return { status: 'failed', message: v.issues.map((i) => i.message).join('; ') };
     if (opts.dryRun) return { status: 'dry_run', message: 'youtube dry-run' };
+    if ((await this.authStatus()).state !== 'ok') return { status: 'auth_required', message: 'YouTube 需要有效的 access token' };
     const url = base('youtube', 'https://www.googleapis.com');
-    // resumable: POST init then PUT chunk
-    let init: Response;
+    let file: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      init = await fetch(`${url}/upload/youtube/v3/videos?uploadType=resumable`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.creds.accessToken || ''}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          snippet: { title: pkg.title, description: pkg.description, tags: pkg.tags },
-          status: { privacyStatus: 'private' },
-        }),
+      file = await open(pkg.videoPath, 'r');
+      const size = (await file.stat()).size;
+      if (!size) return { status: 'failed', message: 'video file is empty' };
+      const headers = { Authorization: 'Bearer ' + this.creds.accessToken };
+      const init = await fetch(url + '/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+        method: 'POST', signal: opts.signal,
+        headers: { ...headers, 'Content-Type': 'application/json', 'X-Upload-Content-Length': String(size), 'X-Upload-Content-Type': 'video/mp4' },
+        body: JSON.stringify({ snippet: { title: pkg.title, description: pkg.description, tags: pkg.tags }, status: { privacyStatus: 'private' } }),
       });
-    } catch (e) {
-      return { status: 'failed', message: e instanceof Error ? e.message : String(e) };
-    }
-    const location = init.headers.get('location') || init.headers.get('Location');
-    if (!location) {
-      if (init.status === 403) return { status: 'failed', message: 'QUOTA_EXCEEDED' };
-      return { status: 'failed', message: `init failed ${init.status}` };
-    }
-    const put = await fetch(location, {
-      method: 'PUT',
-      headers: { 'Content-Range': `bytes 0-${Math.max(0, pkg.sizeBytes - 1)}/${pkg.sizeBytes}` },
-      body: JSON.stringify({ done: true }),
-    });
-    if (put.status === 308) {
-      // resume once
-      await fetch(location, { method: 'PUT', body: 'final' });
-    }
-    const body = (await put.json().catch(() => ({}))) as { id?: string };
-    return { status: 'published', remoteId: body.id || 'yt-mock', url: `https://youtu.be/${body.id || 'yt-mock'}` };
+      const location = init.headers.get('location');
+      if (!init.ok || !location) return { status: 'failed', message: 'YouTube upload init failed: HTTP ' + init.status };
+      let offset = 0;
+      while (offset < size) {
+        const chunk = Buffer.alloc(Math.min(8 * 1024 * 1024, size - offset));
+        const { bytesRead } = await file.read(chunk, 0, chunk.length, offset);
+        if (bytesRead === 0) return { status: 'failed', message: 'video file changed during upload' };
+        const end = offset + bytesRead - 1;
+        const result = await fetch(location, { method: 'PUT', signal: opts.signal, redirect: 'manual',
+          headers: { ...headers, 'Content-Type': 'video/mp4', 'Content-Length': String(bytesRead), 'Content-Range': 'bytes ' + offset + '-' + end + '/' + size },
+          body: new Uint8Array(chunk.subarray(0, bytesRead)),
+        });
+        if (result.status === 308) {
+          const range = result.headers.get('range')?.match(/^bytes=0-(\d+)$/);
+          const next = range ? Number(range[1]) + 1 : 0;
+          if (next <= offset || next > end + 1) return { status: 'failed', message: 'invalid or stalled YouTube upload range' };
+          offset = next;
+          opts.onProgress?.(offset / size, 'Uploading video');
+          continue;
+        }
+        if (!result.ok) return { status: 'failed', message: 'YouTube upload failed: HTTP ' + result.status };
+        const body = await result.json() as { id?: string };
+        if (!body.id || end + 1 !== size) return { status: 'failed', message: 'YouTube did not confirm a complete video upload' };
+        return { status: 'published', remoteId: body.id, url: 'https://youtu.be/' + body.id };
+      }
+      return { status: 'failed', message: 'YouTube upload incomplete' };
+    } catch (error) {
+      return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+    } finally { await file?.close(); }
   }
 }
 
@@ -121,6 +130,7 @@ export class TelegramPublisher implements Publisher {
     const v = this.validate(pkg);
     if (!v.ok) return { status: 'failed', message: v.issues.map((i) => i.message).join('; ') };
     if (opts.dryRun) return { status: 'dry_run' };
+    if (!existsSync(pkg.videoPath)) return { status: 'failed', message: 'video file not found' };
     const url = base('telegram', 'https://api.telegram.org');
     const form = new FormData();
     form.append('chat_id', this.opts.chatId);
@@ -131,7 +141,7 @@ export class TelegramPublisher implements Publisher {
     }
     const res = await fetch(`${url}/bot${this.opts.botToken}/sendVideo`, { method: 'POST', body: form });
     const body = (await res.json()) as { ok?: boolean; result?: { message_id?: number } };
-    if (!body.ok) return { status: 'failed', message: 'telegram send failed' };
+    if (!res.ok || !body.ok || !body.result?.message_id) return { status: 'failed', message: 'telegram send failed' };
     return { status: 'published', remoteId: String(body.result?.message_id ?? '') };
   }
 }
@@ -192,6 +202,7 @@ export class SteamWorkshopPublisher implements Publisher {
       let out = '';
       child.stdout.on('data', (d) => (out += d));
       child.stderr.on('data', (d) => (out += d));
+      child.on('error', (error) => resolve({ code: 1, out: error.message }));
       child.on('close', (code) => resolve({ code: code ?? 1, out }));
     });
     const m = result.out.match(/publishedfileid["\s:]+(\d+)/i);
@@ -202,7 +213,7 @@ export class SteamWorkshopPublisher implements Publisher {
         readVdfWithId(vdfPath, publishedfileid)
       );
     }
-    return result.code === 0
+    return result.code === 0 && publishedfileid && publishedfileid !== '0'
       ? { status: 'submitted', remoteId: publishedfileid }
       : { status: 'failed', message: result.out.slice(-200) };
   }
@@ -254,30 +265,26 @@ export class DouyinPublisher implements Publisher {
     const v = this.validate(pkg);
     if (!v.ok) return { status: 'failed', message: v.issues.map((i) => i.message).join('; ') };
     if (opts.dryRun) return { status: 'dry_run', message: 'douyin dry-run (requires explicit confirm)' };
-    const url = base('douyin', 'https://open.douyin.com');
-    const form = new FormData();
-    if (existsSync(pkg.videoPath)) {
-      const buf = await import('node:fs/promises').then((fs) => fs.readFile(pkg.videoPath));
-      form.append('video', new Blob([buf]), 'video.mp4');
-    }
-    const up = await fetch(`${url}/api/douyin/v1/video/upload_video/`, { method: 'POST', body: form });
-    const upBody = (await up.json()) as { data?: { video?: { video_id?: string } }; error_code?: number };
-    if (upBody.error_code === 2190005) return { status: 'failed', message: '2190005 file too large' };
-    const videoId = upBody.data?.video?.video_id;
-    const create = await fetch(`${url}/api/douyin/v1/video/create_video/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        open_id: this.creds.openId,
-        video_id: videoId,
-        text: `${pkg.title} ${pkg.tags.map((t) => `#${t}`).join(' ')}`,
-      }),
-    });
-    const createBody = (await create.json()) as { data?: { item_id?: string }; error_code?: number };
-    if (createBody.error_code === 2114006) {
-      return { status: 'failed', message: '2114006 duration exceeds limit' };
-    }
-    return { status: 'submitted', remoteId: createBody.data?.item_id };
+    if (!this.creds.accessToken || !this.creds.openId) return { status: 'auth_required', message: '抖音需要 access token 和 open id' };
+    try {
+      const url = base('douyin', 'https://open.douyin.com');
+      const query = '?open_id=' + encodeURIComponent(this.creds.openId);
+      const headers = { 'access-token': this.creds.accessToken };
+      const form = new FormData();
+      form.append('video', new Blob([await readFile(pkg.videoPath)]), 'video.mp4');
+      const up = await fetch(url + '/api/douyin/v1/video/upload_video/' + query, { method: 'POST', headers, body: form, signal: opts.signal });
+      const uploaded = await up.json() as { data?: { error_code?: number; description?: string; video?: { video_id?: string } } };
+      if (!up.ok || uploaded.data?.error_code !== 0 || !uploaded.data.video?.video_id) {
+        return { status: 'failed', message: uploaded.data?.description || 'Douyin upload failed: ' + (uploaded.data?.error_code ?? up.status) };
+      }
+      const created = await fetch(url + '/api/douyin/v1/video/create_video/' + query, { method: 'POST', signal: opts.signal,
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_id: uploaded.data.video.video_id, text: pkg.title + ' ' + pkg.tags.map((t) => '#' + t).join(' ') }),
+      });
+      const result = await created.json() as { data?: { error_code?: number; description?: string; item_id?: string } };
+      if (!created.ok || result.data?.error_code !== 0 || !result.data.item_id) return { status: 'failed', message: result.data?.description || 'Douyin create failed: ' + (result.data?.error_code ?? created.status) };
+      return { status: 'submitted', remoteId: result.data.item_id };
+    } catch (error) { return { status: 'failed', message: error instanceof Error ? error.message : String(error) }; }
   }
 }
 
@@ -308,6 +315,7 @@ export class XiaohongshuExportPublisher implements Publisher {
     if (!v.ok) return { status: 'failed', message: v.issues.map((i) => i.message).join('; ') };
     const dir = join(this.dataDir, 'exports', pkg.taskId, 'xiaohongshu');
     if (opts.dryRun) return { status: 'dry_run', exportDir: dir };
+    if (!existsSync(pkg.videoPath) || !existsSync(pkg.coverPath)) return { status: 'failed', message: 'video or cover file not found' };
     mkdirSync(dir, { recursive: true });
     if (existsSync(pkg.videoPath)) copyFileSync(pkg.videoPath, join(dir, 'video.mp4'));
     if (existsSync(pkg.coverPath)) copyFileSync(pkg.coverPath, join(dir, 'cover.jpg'));
@@ -357,6 +365,7 @@ export class DiscordWebhookPublisher implements Publisher {
     const v = this.validate(pkg);
     if (!v.ok) return { status: 'failed', message: v.issues.map((i) => i.message).join('; ') };
     if (opts.dryRun) return { status: 'dry_run' };
+    if (!existsSync(pkg.videoPath)) return { status: 'failed', message: 'video file not found' };
     const form = new FormData();
     form.append('payload_json', JSON.stringify({ content: `${pkg.title}\n${pkg.description}` }));
     if (existsSync(pkg.videoPath)) {

@@ -1,8 +1,10 @@
 /**
  * Cover templates (F2-M3) — JSON-described layouts.
  */
+export type CoverTemplateId = 'grid' | 'single' | 'collage' | 'poster-3x4' | 'bilibili-16x10' | 'youtube-720p';
+
 export interface CoverTemplate {
-  id: string;
+  id: CoverTemplateId;
   name: string;
   width: number;
   height: number;

@@ -51,9 +51,9 @@ async function canWriteDirectory(path: string): Promise<boolean> {
   return true;
 }
 
-function checkVideoRenderPythonDeps(): { ok: true } | { ok: false; detail: string } {
+function checkVideoRenderPythonDeps(configured?: string | null): { ok: true } | { ok: false; detail: string } {
   try {
-    execFileSync(resolvePython(), [
+    execFileSync(resolvePython({ configured }), [
       '-c',
       'import numpy; import imageio_ffmpeg; import moviepy; import PIL; import proglog; print("OK")',
     ], {
@@ -142,7 +142,7 @@ router.get('/check', async (req: Request, res: Response) => {
     rendererPath
   ));
 
-  const renderDeps = checkVideoRenderPythonDeps();
+  const renderDeps = checkVideoRenderPythonDeps(config?.runtime?.python);
   items.push(item(
     'video-renderer-python-deps',
     '视频渲染 Python 依赖',
