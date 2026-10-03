@@ -22,7 +22,7 @@ services:
       - artflow-data:/data
       - pixiv-cli-state:/root/.pixiv-cli
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/api/system/check').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/api/health').then(async r=>process.exit(r.ok&&(await r.json()).status==='ok'?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 12

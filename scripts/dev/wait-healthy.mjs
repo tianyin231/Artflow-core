@@ -46,11 +46,11 @@ async function ok(base, route, validate) {
 let last = '';
 while (Date.now() < deadline) {
   const [coreOk, studioOk, mockOk] = await Promise.all([
-    ok(options['--core'], '/api/system/check', async (res) => {
+    ok(options['--core'], '/api/health', async (res) => {
       const body = await res.json();
-      // Diagnostics may report missing credentials or optional render deps.
-      // Readiness still requires the real API rather than any HTTP 200.
-      return Array.isArray(body?.data?.items) && ['ok', 'warning', 'error'].includes(body.data.status);
+      // System checks execute optional Python probes; use the lightweight
+      // readiness route and require its JSON contract rather than any HTTP 200.
+      return body?.status === 'ok' && Number.isFinite(Date.parse(body.timestamp));
     }),
     ok(options['--studio'], '/', async (res) => {
       const html = await res.text();

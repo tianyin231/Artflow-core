@@ -51,9 +51,10 @@ test('readiness rejects an HTTP 200 impostor and honors the deadline', async (t)
   assert.ok(Date.now() - start < 1500, 'timeout should not run a full extra polling interval');
 });
 
-test('readiness accepts API diagnostics with optional-dependency warnings', async (t) => {
+test('readiness checks the API health contract without optional dependency probes', async (t) => {
   const url = await listen(t, (req, res) => {
-    if (req.url === '/api/system/check') res.end(JSON.stringify({ data: { status: 'warning', items: [] } }));
+    if (req.url === '/api/health') res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+    else if (req.url === '/api/system/check') res.end(JSON.stringify({ data: { status: 'warning', items: [] } }));
     else res.end('<div id="root"></div><script type="module"></script>');
   });
   const result = await runNode([join(scripts, 'wait-healthy.mjs'), '--core', url, '--studio', url, '--timeout', '1']);
@@ -91,7 +92,7 @@ if (kind === 'core') {
   setInterval(() => { if (fs.existsSync(process.env.TEST_EXIT_FILE)) process.exit(7); }, 50);
 }
 http.createServer((req, res) => {
-  if (req.url === '/api/system/check') res.end(JSON.stringify({ data: { status: 'warning', items: [] } }));
+  if (req.url === '/api/health') res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
   else if (req.url === '/__health') res.end(JSON.stringify({ ok: true }));
   else res.end('<div id="root"></div><script type="module"></script>');
 }).listen(port, '127.0.0.1');
