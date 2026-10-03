@@ -1,10 +1,10 @@
 /**
  * @slow — ffmpeg ugoira + loudnorm smoke
  */
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { ugoiraToMp4, loudnorm } from '../../renderer/ugoira';
 import { resolvePython } from '../../runtime/resolvePython';
 
@@ -20,25 +20,29 @@ describe('video pipeline @slow', () => {
   it('converts ugoira frames to mp4 within 1 frame of delay sum', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ugoira-'));
     const frames = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       const p = join(dir, `f${i}.png`);
       makePng(p, [20 * i + 40, 80, 120]);
-      frames.push({ file: p, delayMs: 250 });
+      frames.push({ file: p, delayMs: i === 0 ? 200 : 800 });
     }
     const out = join(dir, 'out.mp4');
     const result = await ugoiraToMp4({ frames, output: out, width: 320, height: 180 });
     expect(existsSync(result.path)).toBe(true);
-    expect(Math.abs(result.durationSec - 1.0)).toBeLessThanOrEqual(0.1);
+    const duration = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', out], { encoding: 'utf8' }).trim());
+    expect(Math.abs(duration - 1.0)).toBeLessThanOrEqual(1 / 30);
+    expect(result.durationSec).toBe(duration);
   }, 60000);
 
-  it('loudnorm produces a file', async () => {
+  it('normalizes a quiet audio stream to the requested loudness', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loud-'));
-    const frames = [{ file: join(dir, 'f.png'), delayMs: 500 }];
-    makePng(frames[0].file, [10, 10, 10]);
-    const vid = join(dir, 'v.mp4');
-    await ugoiraToMp4({ frames, output: vid, width: 320, height: 180 });
-    const out = join(dir, 'n.mp4');
-    await loudnorm(vid, out, -14);
+    const input = join(dir, 'quiet.wav');
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-af', 'volume=0.05', input]);
+    const out = join(dir, 'normalized.wav');
+    await loudnorm(input, out, -14);
     expect(existsSync(out)).toBe(true);
+    const measured = spawnSync('ffmpeg', ['-i', out, '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'], { encoding: 'utf8' });
+    expect(measured.status).toBe(0);
+    const loudness = Number(measured.stderr.match(/"input_i"\s*:\s*"([\d.-]+)"/)?.[1]);
+    expect(Math.abs(loudness + 14)).toBeLessThan(1);
   }, 60000);
 });

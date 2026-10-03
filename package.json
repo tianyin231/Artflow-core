@@ -130,6 +130,8 @@
   },
   "files": [
     "dist/",
+    "scripts/workflow-*.py",
+    "requirements-python.txt",
     "config/standalone.config.example.json",
     "README.md",
     "README_EN.md",

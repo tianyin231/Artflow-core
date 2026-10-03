@@ -28,6 +28,7 @@ export function detectBpm(onsets: number[], sampleRate = 100): number {
 
 /** Build a click-track onset array at the given BPM. */
 export function clickOnsets(bpm: number, seconds: number, sampleRate = 100): number[] {
+  validateGridInput(bpm, seconds, sampleRate);
   const period = (60 / bpm) * sampleRate;
   const n = Math.floor(seconds * sampleRate);
   const arr = new Array(n).fill(0);
@@ -38,10 +39,17 @@ export function clickOnsets(bpm: number, seconds: number, sampleRate = 100): num
 }
 
 export function buildBeatGrid(bpm: number, durationSec: number): BeatGrid {
+  validateGridInput(bpm, durationSec);
   const beatSec: number[] = [];
   const period = 60 / bpm;
   for (let t = 0; t <= durationSec; t += period) beatSec.push(Math.round(t * 1000) / 1000);
   return { bpm, beatSec };
+}
+
+function validateGridInput(bpm: number, duration: number, sampleRate = 100): void {
+  if (!Number.isFinite(bpm) || bpm <= 0 || !Number.isFinite(duration) || duration < 0 ||
+      !Number.isFinite(sampleRate) || sampleRate <= 0 || duration * bpm / 60 > 1_000_000 ||
+      duration * sampleRate > 1_000_000) throw new Error('Beat grid requires a positive BPM/sample rate and a finite, bounded non-negative duration');
 }
 
 /** Snap cut times to nearest beat. Returns new cuts and mean deviation ms. */

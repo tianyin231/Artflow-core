@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DownloadManager } from '../download/DownloadManager';
 import { FileService, PixivMetadata } from '../download/FileService';
 import { PixivAuth } from '../pixiv/AuthClient';
@@ -14,6 +14,9 @@ import { StandaloneConfig, TargetConfig, loadConfig, getConfigPath } from '../co
 import { logger } from '../logger';
 import { withTimeout } from '../utils/timing';
 import { resolvePython } from '../runtime/resolvePython';
+import { resolveWorkflowScript } from '../runtime/resolveWorkflowScript';
+import { validateRenderOptions, WorkflowRenderOptions } from '../renderer/options';
+import { getCoverTemplate } from '../renderer/templates';
 import {
   BilibiliPublishPackage,
   BilibiliPublishPreview,
@@ -296,16 +299,17 @@ export class WorkflowManager {
   public rerenderVideo(
     taskId: string,
     note?: string,
-    options?: {
-      transition?: string;
-      coverTemplate?: string;
-      subtitles?: 'none' | 'srt' | 'ass';
-    }
+    options?: WorkflowRenderOptions
   ): WorkflowTask {
     const task = this.requireTask(taskId);
     if (!task.plan) {
       throw new Error('Workflow plan is missing');
     }
+    if (['running', 'approved', 'asset_review_required', 'cover_review_required'].includes(task.status)) {
+      throw new Error(`Task ${taskId} is not ready for video rerendering`);
+    }
+    const renderOptions = validateRenderOptions(options);
+    if (note !== undefined && typeof note !== 'string') throw new Error('Render note must be a string');
     const acceptedImages = task.assets.filter((asset) => asset.status === 'accepted');
     if (acceptedImages.length === 0) {
       throw new Error('No accepted images available for rendering');
@@ -313,6 +317,7 @@ export class WorkflowManager {
 
     task.status = 'running';
     task.videoPath = undefined;
+    task.subtitlePath = undefined;
     task.publish = undefined;
     task.review = { status: 'pending' };
     task.requiresUserConfirmation = false;
@@ -331,12 +336,7 @@ export class WorkflowManager {
       error: undefined,
       completedAt: undefined,
     });
-    if (options && task.plan) {
-      const v = task.plan.video as Record<string, unknown>;
-      if (options.transition) v.transition = options.transition;
-      if (options.coverTemplate) v.coverTemplate = options.coverTemplate;
-      if (options.subtitles) v.subtitles = options.subtitles;
-    }
+    Object.assign(task.plan.video, renderOptions);
     this.addLog(task, 'info', note || '重新生成视频');
     if (options) {
       this.addLog(
@@ -570,6 +570,11 @@ export class WorkflowManager {
   private async renderAndPauseForReview(task: WorkflowTask, acceptedImages: WorkflowImageAsset[]): Promise<void> {
     this.startStage(task, 'render', '正在调用 MoviePy 渲染视频');
     const rankedAssets = this.rankVideoAssets(task, acceptedImages);
+    if (task.plan?.video.coverTemplate) {
+      task.coverPath = await this.generateCover(task, rankedAssets.map((asset) => asset.path).slice(0, 4), task.plan.video.coverTemplate);
+      this.addProgressEvent(task, 'image', 'cover', `封面已更新: ${basename(task.coverPath)}`, { artifactPath: task.coverPath });
+      this.completeStage(task, 'image', `封面已更新: ${basename(task.coverPath)}`);
+    }
     await this.applyAiEffectPlan(task, rankedAssets);
     task.videoPath = await this.renderVideo(task, rankedAssets);
     task.latestArtifact = { type: 'video', path: task.videoPath, name: basename(task.videoPath) };
@@ -1189,72 +1194,18 @@ export class WorkflowManager {
     const outputDir = resolve(process.cwd(), 'workflow_runs', task.id);
     mkdirSync(outputDir, { recursive: true });
     const coverPath = join(outputDir, `${task.id}-cover-${Date.now()}.jpg`);
-    const title = (titleOverride?.trim() || task.plan.title).replace(/"/g, '\\"');
-    const safeLayout = ['grid', 'single', 'hero_left', 'hero_top', 'strip'].includes(layout) ? layout : 'grid';
+    const template = getCoverTemplate(layout);
+    const configPath = `${coverPath}.json`;
+    writeFileSync(configPath, JSON.stringify({
+      imagePaths, outputPath: coverPath, title: titleOverride?.trim() || task.plan.title,
+      width: template?.width ?? task.plan.video.width,
+      height: template?.height ?? task.plan.video.height,
+      layout: template?.layout ?? layout,
+      titleStyle: template?.title,
+    }));
     await execFileAsync(resolvePython({ configured: loadConfig(this.workflowConfigPath).runtime?.python }), [
-      '-c',
-      [
-        'from PIL import Image, ImageDraw, ImageFont, ImageFilter',
-        'import sys',
-        'dst, title, width, height, layout = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]',
-        'sources = sys.argv[6:12]',
-        'def cover_crop(src, box_w, box_h):',
-        '    img = Image.open(src).convert("RGB")',
-        '    scale = max(box_w / img.width, box_h / img.height)',
-        '    resized = img.resize((round(img.width * scale), round(img.height * scale)), Image.Resampling.LANCZOS)',
-        '    left = max((resized.width - box_w) // 2, 0)',
-        '    top = max((resized.height - box_h) // 2, 0)',
-        '    return resized.crop((left, top, left + box_w, top + box_h))',
-        'def paste_box(src, box):',
-        '    x, y, w, h = box',
-        '    canvas.paste(cover_crop(src, w, h), (x, y))',
-        'sources = [src for src in sources if src]',
-        'canvas = Image.new("RGB", (width, height), (18, 18, 18))',
-        'count = len(sources)',
-        'if layout == "single" or count == 1:',
-        '    canvas.paste(cover_crop(sources[0], width, height), (0, 0))',
-        'elif layout == "hero_left":',
-        '    main_w = round(width * 0.62)',
-        '    paste_box(sources[0], (0, 0, main_w, height))',
-        '    side = sources[1:] or sources[:1]',
-        '    cell_h = max(1, height // len(side[:3]))',
-        '    for i, src in enumerate(side[:3]):',
-        '        y = i * cell_h',
-        '        paste_box(src, (main_w, y, width - main_w, height - y if i == len(side[:3]) - 1 else cell_h))',
-        'elif layout == "hero_top":',
-        '    main_h = round(height * 0.62)',
-        '    paste_box(sources[0], (0, 0, width, main_h))',
-        '    bottom = sources[1:] or sources[:1]',
-        '    cell_w = max(1, width // len(bottom[:4]))',
-        '    for i, src in enumerate(bottom[:4]):',
-        '        x = i * cell_w',
-        '        paste_box(src, (x, main_h, width - x if i == len(bottom[:4]) - 1 else cell_w, height - main_h))',
-        'elif layout == "strip":',
-        '    cell_w = max(1, width // min(count, 6))',
-        '    for i, src in enumerate(sources[:6]):',
-        '        x = i * cell_w',
-        '        paste_box(src, (x, 0, width - x if i == min(count, 6) - 1 else cell_w, height))',
-        'elif count == 2:',
-        '    if width >= height:',
-        '        boxes = [(0, 0, width // 2, height), (width // 2, 0, width - width // 2, height)]',
-        '    else:',
-        '        boxes = [(0, 0, width, height // 2), (0, height // 2, width, height - height // 2)]',
-        '    for src, box in zip(sources, boxes):',
-        '        paste_box(src, box)',
-        'else:',
-        '    cell_w, cell_h = width // 2, height // 2',
-        '    boxes = [(0, 0, cell_w, cell_h), (cell_w, 0, width - cell_w, cell_h), (0, cell_h, cell_w, height - cell_h), (cell_w, cell_h, width - cell_w, height - cell_h)]',
-        '    for src, box in zip(sources[:4], boxes):',
-        '        paste_box(src, box)',
-        'canvas.convert("RGB").save(dst, quality=92)',
-      ].join('\n'),
-      coverPath,
-      title,
-      String(task.plan.video.width),
-      String(task.plan.video.height),
-      safeLayout,
-      ...imagePaths,
-    ]);
+      resolveWorkflowScript('workflow-render-cover.py'), configPath,
+    ], { timeout: 60_000 });
     return coverPath;
   }
 
@@ -1289,7 +1240,7 @@ export class WorkflowManager {
     const outputDir = resolve(process.cwd(), 'workflow_runs', task.id);
     mkdirSync(outputDir, { recursive: true });
 
-    const outputPath = join(outputDir, `${task.id}.mp4`);
+    const outputPath = join(outputDir, `${task.id}-${randomUUID()}.mp4`);
     const renderConfigPath = join(outputDir, 'render-config.json');
     writeFileSync(
       renderConfigPath,
@@ -1311,6 +1262,10 @@ export class WorkflowManager {
           bgmPath: task.plan.video.bgmPath,
           disclaimer: task.plan.video.disclaimer,
           effectPlan: task.plan.video.effectPlan,
+          transition: task.plan.video.transition,
+          subtitles: task.plan.video.subtitles,
+          title: task.plan.title,
+          totalDuration: task.plan.video.totalDuration,
           imageCredits: assets.map((asset) => ({
             path: asset.path,
             pixivId: asset.pixivId,
@@ -1326,7 +1281,7 @@ export class WorkflowManager {
       'utf-8'
     );
 
-    const scriptPath = resolve(process.cwd(), 'scripts', 'workflow-render-video.py');
+    const scriptPath = resolveWorkflowScript('workflow-render-video.py');
     await new Promise<void>((resolvePromise, reject) => {
       const child = spawn(resolvePython({ configured: loadConfig(this.workflowConfigPath).runtime?.python }), [scriptPath, renderConfigPath], {
         cwd: process.cwd(),
@@ -1359,6 +1314,11 @@ export class WorkflowManager {
       });
     });
 
+    if (!existsSync(outputPath) || statSync(outputPath).size === 0) throw new Error('MoviePy renderer produced no video');
+    const subtitleFormat = task.plan.video.subtitles;
+    task.subtitlePath = subtitleFormat && subtitleFormat !== 'none'
+      ? outputPath.replace(/\.mp4$/, `.${subtitleFormat}`) : undefined;
+    if (task.subtitlePath && !existsSync(task.subtitlePath)) throw new Error('MoviePy renderer produced no subtitles');
     return outputPath;
   }
 

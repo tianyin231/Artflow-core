@@ -1,4 +1,6 @@
 import { StandaloneConfig, TargetConfig } from '../config';
+import { WorkflowRenderOptions } from '../renderer/options';
+export type { WorkflowRenderOptions } from '../renderer/options';
 
 export type WorkflowStageId =
   | 'plan'
@@ -45,7 +47,7 @@ export interface WorkflowPlan {
   title: string;
   description: string;
   pixivTarget: TargetConfig;
-  video: {
+  video: WorkflowRenderOptions & {
     style: WorkflowVideoStyle;
     motion: WorkflowVideoMotion;
     width: number;
@@ -260,6 +262,7 @@ export interface WorkflowTask {
   progressEvents?: WorkflowProgressEvent[];
   coverPath?: string;
   videoPath?: string;
+  subtitlePath?: string;
   review?: {
     status: 'pending' | 'approved' | 'rejected';
     note?: string;
