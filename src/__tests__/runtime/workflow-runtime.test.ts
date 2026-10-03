@@ -2,6 +2,8 @@ import * as config from '../../config';
 import * as python from '../../runtime/resolvePython';
 import { WorkflowManager } from '../../workflow/WorkflowManager';
 import { FileService } from '../../download/FileService';
+import { resolveWorkflowScript } from '../../runtime/resolveWorkflowScript';
+import { existsSync } from 'node:fs';
 
 describe('workflow runtime configuration', () => {
   afterEach(() => jest.restoreAllMocks());
@@ -18,5 +20,14 @@ describe('workflow runtime configuration', () => {
     const service = new FileService({}, 'America/Los_Angeles');
     expect(service.getOrganizedDirectory('/images', 'byDay', { date: new Date('2026-10-02T00:00:00Z') }))
       .toContain('2026-10-01');
+  });
+
+  it('finds packaged runtime scripts when launched from another working directory', () => {
+    jest.spyOn(process, 'cwd').mockReturnValue('/unrelated/user/directory');
+    for (const name of ['workflow-render-cover.py', 'workflow-render-video.py'] as const) {
+      const path = resolveWorkflowScript(name);
+      expect(path).not.toContain('/unrelated/user/directory');
+      expect(existsSync(path)).toBe(true);
+    }
   });
 });
