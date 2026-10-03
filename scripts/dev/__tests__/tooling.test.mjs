@@ -227,6 +227,6 @@ test('verify-all preserves checkout paths, records step failures and continues r
   assert.match(summary, /OVERALL: FAIL/);
   const calls = (await fs.readFile(log, 'utf8')).trim().split('\n');
   assert.ok(calls.every((line) => line.split('|')[1] === core), 'E2E and every check must receive this core checkout');
-  assert.ok(calls.some((line) => line.includes('--maxWorkers=2 --workerIdleMemoryLimit=128MB')));
+  assert.equal(calls.filter((line) => line.startsWith(`${core}|`) && line.endsWith('|test -- --ci')).length, 2);
   assert.ok((await fs.stat(join(core, '.artflow-dev/verify/studio-lint.log'))).isFile());
 });
