@@ -201,7 +201,9 @@ export class JobQueue extends EventEmitter {
   ) {
     super();
     for (const [name, value] of Object.entries(opts.concurrency ?? {})) {
-      if (!Number.isInteger(value) || value < 0) throw new Error(`invalid concurrency for ${name}`);
+      if (!Object.hasOwn(DEFAULT_CONCURRENCY, name) || !Number.isInteger(value) || value < 0) {
+        throw new Error(`invalid concurrency for ${name}`);
+      }
     }
     if (!Number.isInteger(opts.maxAttempts ?? 3) || (opts.maxAttempts ?? 3) < 1) {
       throw new Error('maxAttempts must be a positive integer');
@@ -220,6 +222,7 @@ export class JobQueue extends EventEmitter {
 
   enqueue(opts: EnqueueOptions): JobRow {
     const now = (this.opts.now ?? Date.now)();
+    if (!Object.hasOwn(DEFAULT_CONCURRENCY, opts.kind)) throw new Error('invalid job kind');
     const maxAttempts = opts.maxAttempts ?? this.opts.maxAttempts ?? 3;
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error('maxAttempts must be a positive integer');
     if (!Number.isFinite(opts.nextRunAt ?? now)) throw new Error('nextRunAt must be finite');
@@ -230,7 +233,6 @@ export class JobQueue extends EventEmitter {
       const existing = this.store.findByIdempotencyKey(opts.idempotencyKey);
       if (existing) return existing;
     }
-    if (!(opts.kind in DEFAULT_CONCURRENCY)) throw new Error('invalid job kind');
     const payload = JSON.stringify(opts.payload ?? {});
     if (payload === undefined) throw new Error('payload must be JSON serializable');
     const job: JobRow = {

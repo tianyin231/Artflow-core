@@ -240,4 +240,14 @@ describe('JobQueue', () => {
     expect(() => new JobQueue(store, { concurrency: { render: Infinity } })).toThrow();
     expect(store.depth()).toBe(0);
   });
+
+  it('rejects inherited property names as job kinds and concurrency keys', () => {
+    const store = new MemoryJobStore();
+    const q = new JobQueue(store);
+    for (const kind of ['toString', '__proto__']) {
+      expect(() => q.enqueue({ kind: kind as 'render', payload: {} })).toThrow('invalid job kind');
+    }
+    expect(() => new JobQueue(store, { concurrency: JSON.parse('{"__proto__":1}') })).toThrow('invalid concurrency');
+    expect(store.depth()).toBe(0);
+  });
 });
