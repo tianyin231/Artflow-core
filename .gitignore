@@ -282,3 +282,6 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdiskdocs/ADD_GITHUB_PAGES_LINK.md
+
+# Artflow local dev state (dev-stack fixture data, verify logs)
+.artflow-dev/

@@ -1,0 +1,56 @@
+# Artflow core API + optional fixture mock; studio remains an opt-in draft.
+# Run from Artflow-core:  docker compose -f deploy/docker-compose.yml up -d
+# Studio is built from ${ARTFLOW_STUDIO_DIR:-../../Artflow-studio} (sibling checkout).
+# Artflow-studio does not ship a Dockerfile; --profile studio requires your own.
+# Fixture OAuth: also set ARTFLOW_PIXIV_OAUTH_BASE_URL=http://mock:3302.
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.core
+    ports:
+      - "127.0.0.1:3300:3300"
+    environment:
+      - PORT=3300
+      - HOST=0.0.0.0
+      - ARTFLOW_DATA_DIR=/data
+      - ARTFLOW_PYTHON=/app/.venv/bin/python
+      - ARTFLOW_FIXTURE_MODE=${ARTFLOW_FIXTURE_MODE:-0}
+      - ARTFLOW_PIXIV_PROVIDER=${ARTFLOW_PIXIV_PROVIDER:-}
+      - ARTFLOW_PIXIV_OAUTH_BASE_URL=${ARTFLOW_PIXIV_OAUTH_BASE_URL:-}
+    volumes:
+      - artflow-data:/data
+      - pixiv-cli-state:/root/.pixiv-cli
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3300/api/health').then(async r=>process.exit(r.ok&&(await r.json()).status==='ok'?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  studio:
+    profiles: ["studio"]
+    build:
+      context: ${ARTFLOW_STUDIO_DIR:-../../Artflow-studio}
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:5373:80"
+    depends_on:
+      core:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mock:
+    profiles: ["fixture"]
+    image: node:20-alpine
+    working_dir: /app
+    command: ["node", "-e", "require('./test/mock-servers/index.cjs').createMockServer().listen(3302, '0.0.0.0')"]
+    volumes:
+      - ../test/mock-servers:/app/test/mock-servers:ro
+    ports:
+      - "127.0.0.1:3302:3302"
+    restart: unless-stopped
+
+volumes:
+  artflow-data:
+  pixiv-cli-state:
