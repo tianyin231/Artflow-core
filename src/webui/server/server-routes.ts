@@ -10,6 +10,7 @@ import filesRoutes from '../routes/files';
 import workflowRoutes from '../routes/workflow';
 import systemRoutes from '../routes/system';
 import publishersRoutes from '../routes/publishers';
+import metricsRoutes from '../routes/metrics';
 
 /**
  * Setup API routes for Express app
@@ -30,8 +31,9 @@ export function setupRoutes(app: Express): void {
   app.use('/api/workflow', workflowRoutes);
   app.use('/api/system', systemRoutes);
   app.use('/api/publishers', publishersRoutes);
+  app.use('/api/metrics', metricsRoutes);
+  app.use('/metrics', metricsRoutes);
 }
-
 
 
 
