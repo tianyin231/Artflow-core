@@ -318,7 +318,7 @@ export async function normalizeFiles(req: Request, res: Response): Promise<void>
     database = new Database(config.storage!.databasePath!);
     database.migrate();
 
-    const fileService = new FileService(config.storage!);
+    const fileService = new FileService(config.storage!, config.runtime?.timezone);
     const normalizationService = new FileNormalizationService(
       config.storage!,
       fileService,

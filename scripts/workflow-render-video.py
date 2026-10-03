@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from imageio_ffmpeg import get_ffmpeg_exe
-from moviepy import AudioFileClip, ColorClip, CompositeVideoClip, ImageClip, concatenate_videoclips, afx, vfx
+from moviepy import AudioFileClip, ColorClip, CompositeVideoClip, ImageClip, VideoClip, afx, vfx
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 from proglog import ProgressBarLogger
 
@@ -65,6 +65,9 @@ class RenderConfig:
     image_credits: dict[str, ImageCredit]
     disclaimer: DisclaimerConfig | None
     effect_plan: EffectPlan | None
+    transition: str | None
+    subtitle_format: str
+    total_duration: float | None
 
 
 class TenPercentLogger(ProgressBarLogger):
@@ -99,6 +102,8 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "/Library/Fonts/Arial Unicode.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ):
         try:
             return ImageFont.truetype(font_path, size)
@@ -294,8 +299,8 @@ def load_config(path: Path) -> RenderConfig:
         output_path=Path(data["outputPath"]),
         size=(int(data["size"]["width"]), int(data["size"]["height"])),
         fps=int(data["fps"]),
-        seconds_per_image=max(float(data["secondsPerImage"]), 4.0),
-        crossfade=min(max(float(data["crossfade"]), 0.35), 0.9),
+        seconds_per_image=max(float(data["secondsPerImage"]), 1 / int(data["fps"])),
+        crossfade=min(max(float(data["crossfade"]), 0), float(data["secondsPerImage"]) / 2),
         zoom=min(float(data["zoom"]), 1.06),
         shuffle_seed=int(data["shuffleSeed"]),
         max_images=int(data["maxImages"]),
@@ -304,6 +309,9 @@ def load_config(path: Path) -> RenderConfig:
         image_credits=image_credits,
         disclaimer=disclaimer,
         effect_plan=effect_plan,
+        transition=data.get("transition"),
+        subtitle_format=str(data.get("subtitles") or "none"),
+        total_duration=float(data["totalDuration"]) if data.get("totalDuration") else None,
     )
 
 
@@ -328,6 +336,10 @@ def make_clip(path: Path, config: RenderConfig, index: int) -> CompositeVideoCli
             "sway": "cinematic_sway",
             "pulse": "pulse_pop",
         }[shot_effect]
+    if config.transition in {"kenburns-zoom-in", "kenburns-pan-left", "zoom-out"}:
+        motion = "pan_zoom" if config.transition == "kenburns-pan-left" else "slow_zoom"
+        shot = None
+        shot_effect = "pan_left" if config.transition == "kenburns-pan-left" else None
 
     contain_scale = min(width / image_width, height / image_height)
     foreground_size = (round(image_width * contain_scale), round(image_height * contain_scale))
@@ -344,6 +356,8 @@ def make_clip(path: Path, config: RenderConfig, index: int) -> CompositeVideoCli
 
     if motion != "none":
         motion_zoom = shot.zoom if shot else config.zoom
+        if config.transition in {"kenburns-zoom-in", "kenburns-pan-left"}:
+            motion_zoom = 1.08
         if motion in {"beat_zoom", "beat_cut", "pulse_pop"}:
             motion_zoom = max(config.zoom, 1.1 if index % 2 == 0 else 1.05)
             if shot:
@@ -357,6 +371,9 @@ def make_clip(path: Path, config: RenderConfig, index: int) -> CompositeVideoCli
             if shot:
                 motion_zoom = max(shot.zoom, 1.025 + 0.035 * shot.intensity)
         image_clip = image_clip.resized(lambda t: 1 + ((motion_zoom - 1) * (t / config.seconds_per_image)))
+        if config.transition == "zoom-out":
+            image_clip = ImageClip(str(path)).with_duration(config.seconds_per_image).resized(foreground_size).resized(
+                lambda t: 1.1 - 0.1 * t / config.seconds_per_image).with_position("center")
     if motion in {"pan_zoom", "slide_parallax", "drift_zoom", "cinematic_sway"}:
         direction = -1 if index % 2 else 1
         if shot_effect == "pan_left":
@@ -389,12 +406,90 @@ def make_clip(path: Path, config: RenderConfig, index: int) -> CompositeVideoCli
     credit_overlay_path = make_credit_overlay(path, config)
     if credit_overlay_path:
         layers.append(ImageClip(str(credit_overlay_path)).with_duration(config.seconds_per_image))
-    if config.crossfade > 0:
+    if config.crossfade > 0 and config.transition is None:
         image_clip = image_clip.with_effects([vfx.FadeIn(config.crossfade), vfx.FadeOut(config.crossfade)])
         background = background.with_effects([vfx.FadeIn(config.crossfade), vfx.FadeOut(config.crossfade)])
         layers[0] = background
         layers[2] = image_clip
     return CompositeVideoClip(layers, size=config.size).with_duration(config.seconds_per_image)
+
+
+def compose_clips(clips: list, config: RenderConfig) -> tuple[CompositeVideoClip, list[float]]:
+    """Compose overlapping clips with the requested visible transition."""
+    timeline, starts = [], []
+    end = 0.0
+    duration_by_transition = {"crossfade": 0.5, "push-left": 0.4, "wipe-right": 0.45,
+                              "blur-in": 0.6, "kenburns-zoom-in": 0.5, "kenburns-pan-left": 0.5, "zoom-out": 0.5}
+    for index, clip in enumerate(clips):
+        duration = min(duration_by_transition.get(config.transition, config.crossfade), clip.duration / 2)
+        if index:
+            duration = min(duration, clips[index - 1].duration / 2)
+        overlap = duration if index and config.transition != "flash-white" else 0
+        start = end - overlap
+        if config.transition == "flash-white":
+            fade = min(0.125, clip.duration / 2)
+            effects = ([vfx.FadeIn(fade, initial_color=(255, 255, 255))] if index else []) + (
+                [vfx.FadeOut(fade, final_color=(255, 255, 255))] if index < len(clips) - 1 else [])
+            clip = clip.with_effects(effects)
+        elif index and duration > 0:
+            if config.transition == "push-left":
+                previous = timeline[-1]
+                move_at = clips[index - 1].duration - duration
+                timeline[-1] = previous.with_position(lambda t, at=move_at, d=duration, pos=previous.pos: (
+                    pos(t)[0] - config.size[0] * max(0, min(1, (t - at) / d)), 0))
+                clip = clip.with_position(lambda t, d=duration: (config.size[0] * max(0, 1 - t / d), 0))
+            elif config.transition == "wipe-right":
+                width, height = config.size
+                mask = VideoClip(lambda t, d=duration: np.tile((np.arange(width) < width * min(1, t / d)).astype(float), (height, 1)),
+                                 is_mask=True).with_duration(clip.duration)
+                clip = clip.with_mask(mask)
+            else:
+                if config.transition == "blur-in":
+                    clip = clip.transform(lambda get_frame, t, d=duration: np.array(
+                        Image.fromarray(get_frame(t).astype(np.uint8)).filter(ImageFilter.GaussianBlur(12 * max(0, 1 - t / d)))))
+                clip = clip.with_effects([vfx.CrossFadeIn(duration)])
+        starts.append(start)
+        timeline.append(clip.with_start(start))
+        end = start + clip.duration
+    return CompositeVideoClip(timeline, size=config.size).with_duration(end), starts
+
+
+def write_subtitles(config: RenderConfig, paths: list[Path], starts: list[float], duration: float) -> Path | None:
+    if config.subtitle_format not in {"srt", "ass"}:
+        return None
+
+    def timestamp(seconds: float, ass: bool = False) -> str:
+        unit = 100 if ass else 1000
+        ticks = max(0, round(seconds * unit))
+        whole, fraction = divmod(ticks, unit)
+        hours, rest = divmod(whole, 3600)
+        minutes, secs = divmod(rest, 60)
+        return f"{hours}:{minutes:02}:{secs:02}.{fraction:02}" if ass else f"{hours:02}:{minutes:02}:{secs:02},{fraction:03}"
+
+    cues = []
+    for index, path in enumerate(paths):
+        credit = config.image_credits.get(str(path))
+        inferred_id, inferred_title = infer_credit_from_path(path)
+        author = credit.author_name or credit.author_account if credit else None
+        pixiv_id = credit.pixiv_id if credit else inferred_id
+        text = " · ".join(item for item in (author, f"Pixiv ID: {pixiv_id}" if pixiv_id else None,
+                                            credit.title if credit else inferred_title) if item) or path.stem
+        cues.append((starts[index], starts[index + 1] if index + 1 < len(starts) else duration, text))
+    output = config.output_path.with_suffix(f".{config.subtitle_format}")
+    if config.subtitle_format == "srt":
+        text = "\n\n".join(f"{i + 1}\n{timestamp(start)} --> {timestamp(end)}\n{line}" for i, (start, end, line) in enumerate(cues)) + "\n"
+    else:
+        header = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {config.size[0]}\nPlayResY: {config.size[1]}\n\n"
+                  "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                  "Style: Default,Noto Sans CJK SC,36,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,24,24,24,1\n\n"
+                  "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+        lines = []
+        for start, end, line in cues:
+            escaped = line.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N").replace("\r", "")
+            lines.append(f"Dialogue: 0,{timestamp(start, True)},{timestamp(end, True)},Default,,0,0,0,,{escaped}")
+        text = header + "\n".join(lines) + "\n"
+    output.write_text(text, encoding="utf-8")
+    return output
 
 
 def make_default_audio_file(config: RenderConfig, duration: float) -> Path:
@@ -505,7 +600,14 @@ def main() -> None:
     if disclaimer_clip:
         clips.insert(0, disclaimer_clip)
 
-    video = concatenate_videoclips(clips, method="compose", padding=-config.crossfade)
+    video, starts = compose_clips(clips, config)
+    original_duration = video.duration
+    if config.total_duration is not None:
+        if config.total_duration <= 0:
+            raise ValueError("totalDuration must be positive")
+        video = video.with_speed_scaled(final_duration=config.total_duration)
+        starts = [start * config.total_duration / original_duration for start in starts]
+    subtitle_path = write_subtitles(config, selected_images, starts[1:] if disclaimer_clip else starts, video.duration)
     audio_clip, audio_path = prepare_bgm(config, video.duration)
     silent_output_path = config.output_path.with_name(f"{config.output_path.stem}-silent{config.output_path.suffix}")
     video.write_videofile(
@@ -530,7 +632,8 @@ def main() -> None:
     for clip in clips:
         clip.close()
 
-    print(json.dumps({"outputPath": str(config.output_path), "imageCount": len(selected_images), "hasDisclaimer": disclaimer_clip is not None}))
+    print(json.dumps({"outputPath": str(config.output_path), "imageCount": len(selected_images),
+                      "hasDisclaimer": disclaimer_clip is not None, "subtitlePath": str(subtitle_path) if subtitle_path else None}))
 
 
 if __name__ == "__main__":

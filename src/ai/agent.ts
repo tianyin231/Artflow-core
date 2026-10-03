@@ -18,7 +18,7 @@ export const PROVIDER_PRESETS = [
   { id: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
   { id: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   { id: 'dashscope', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  { id: 'mimo', baseUrl: 'https://api.xiaomi.com/v1', model: 'mimo' },
+  { id: 'mimo', baseUrl: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.6-pro' },
   { id: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3' },
   { id: 'mock', baseUrl: 'http://127.0.0.1:3302/v1', model: 'mock' },
 ] as const;
@@ -59,6 +59,7 @@ export class AiAgent {
     // Step 1: plan
     const prompt = `${getPrompt(this.opts.promptId ?? 'plan-v2')}\n\nUser: ${command}`;
     let raw = '';
+    let requestFailed = false;
     try {
       const r1 = await this.llm.complete(prompt, { json: true });
       raw = r1.text;
@@ -67,24 +68,18 @@ export class AiAgent {
       steps.push({ name: 'plan', ok: true });
     } catch (e) {
       steps.push({ name: 'plan', ok: false, note: String(e) });
-      const plan = localRulePlan(command);
-      return {
-        plan,
-        steps,
-        tokens: { prompt: 0, completion: 0, costUsd: 0 },
-        provider: this.opts.provider ?? 'local-rules',
-      };
+      requestFailed = true;
     }
 
     // Step 2: validate / repair
-    let plan = repairPlan(raw);
+    let plan = requestFailed ? null : repairPlan(raw);
     if (plan) steps.push({ name: 'validate', ok: true });
-    else {
+    else if (!requestFailed) {
       steps.push({ name: 'validate', ok: false, note: 'repair failed' });
       // Step 3: self-critique + revise once
       try {
         const r2 = await this.llm.complete(
-          `The previous JSON was invalid. Fix it.\n${raw}\n\nReturn only valid JSON.`,
+          `${getPrompt(this.opts.promptId ?? 'plan-v2')}\nUser: ${command}\nThe previous JSON was invalid. Fix it.\n${raw}\n\nReturn only valid JSON.`,
           { json: true }
         );
         promptTokens += r2.promptTokens;
@@ -96,6 +91,7 @@ export class AiAgent {
       }
     }
 
+    const usedLocalRules = !plan;
     if (!plan) {
       plan = localRulePlan(command);
       steps.push({ name: 'fallback-local', ok: true });
@@ -111,7 +107,7 @@ export class AiAgent {
       plan,
       steps,
       tokens: { prompt: promptTokens, completion: completionTokens, costUsd: Math.round(costUsd * 1e6) / 1e6 },
-      provider: this.opts.provider ?? 'mock',
+      provider: usedLocalRules ? 'local-rules' : this.opts.provider ?? 'mock',
     };
   }
 }

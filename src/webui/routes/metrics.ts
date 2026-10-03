@@ -34,8 +34,12 @@ export function observeHttp(ok: boolean): void {
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  const idx = Math.max(0, Math.ceil((p / 100) * sorted.length) - 1);
   return sorted[idx];
+}
+
+function escapeLabel(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"');
 }
 
 router.get('/', (_req: Request, res: Response) => {
@@ -60,12 +64,15 @@ router.get('/', (_req: Request, res: Response) => {
     '# TYPE artflow_render_duration_ms summary',
     `artflow_render_duration_ms{quantile="0.5"} ${percentile(renders, 50)}`,
     `artflow_render_duration_ms{quantile="0.95"} ${percentile(renders, 95)}`,
+    `artflow_render_duration_ms_sum ${renders.reduce((sum, value) => sum + value, 0)}`,
+    `artflow_render_duration_ms_count ${renders.length}`,
     '# HELP artflow_provider_calls_total Provider calls',
     '# TYPE artflow_provider_calls_total counter',
     `artflow_provider_calls_total ${metrics.providerCalls}`,
   ];
+  lines.push('# HELP artflow_provider_errors_total Provider errors', '# TYPE artflow_provider_errors_total counter');
   for (const [code, n] of Object.entries(metrics.providerErrors)) {
-    lines.push(`artflow_provider_errors_total{code="${code}"} ${n}`);
+    lines.push(`artflow_provider_errors_total{code="${escapeLabel(code)}"} ${n}`);
   }
   res.setHeader('Content-Type', 'text/plain; version=0.0.4');
   res.send(lines.join('\n') + '\n');

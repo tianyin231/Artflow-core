@@ -1,29 +1,12 @@
-/**
- * Bilibili open-platform publisher with OAuth + HMAC signing.
- * All bases overridable via ARTFLOW_BILIBILI_BASE_URL for mocks.
- */
-import { createHmac } from 'node:crypto';
-import {
-  PublishOptions,
-  PublishPackage,
-  PublishResult,
-  PublishValidation,
-  Publisher,
-  PublisherCapabilities,
-  AuthState,
-  validateCommon,
-} from './types';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { open, readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { PublishOptions, PublishPackage, PublishResult, PublishValidation, Publisher, PublisherCapabilities, AuthState, validateCommon } from './types';
 
-export function bilibiliSign(
-  params: Record<string, string>,
-  clientSecret: string,
-  timestamp: number
-): string {
-  const sorted = Object.keys(params)
-    .sort()
-    .map((k) => `${k}=${params[k]}`)
-    .join('&');
-  const payload = `${sorted}&timestamp=${timestamp}`;
+// https://open.bilibili.com/doc/4/8673959e-f7bb-56e6-6e68-d225f971b81b
+export function bilibiliSign(headers: Record<string, string>, clientSecret: string): string {
+  const payload = Object.keys(headers).filter((k) => k.startsWith('x-bili-')).sort()
+    .map((k) => `${k}:${headers[k]}`).join('\n');
   return createHmac('sha256', clientSecret).update(payload).digest('hex');
 }
 
@@ -39,152 +22,133 @@ export class BilibiliOpenPlatformPublisher implements Publisher {
   readonly id = 'bilibili';
   readonly displayName = 'Bilibili';
   readonly capabilities: PublisherCapabilities = {
-    auth: 'oauth2',
-    maxSizeBytes: 8 * 1024 * 1024 * 1024,
-    maxDurationSec: 3 * 3600,
-    aspectRatios: ['16:9', '9:16', '1:1'],
-    titleMax: 80,
-    descMax: 2000,
-    tagsMax: 12,
+    auth: 'oauth2', maxSizeBytes: 4 * 1024 ** 3, maxDurationSec: 5 * 3600,
+    aspectRatios: ['16:9', '9:16', '1:1'], titleMax: 79, descMax: 249, tagsMax: 12,
   };
+  private pendingState?: string;
 
-  constructor(
-    private creds: BilibiliCredentials,
-    private readonly secretGet?: (id: string) => string | undefined
-  ) {}
+  constructor(private creds: BilibiliCredentials, private readonly secretGet?: (id: string) => string | undefined) {}
 
-  private baseUrl(): string {
-    return process.env.ARTFLOW_BILIBILI_BASE_URL || 'https://openupos.bilivideo.com';
+  private base(host = 'https://member.bilibili.com'): string {
+    return process.env.ARTFLOW_BILIBILI_BASE_URL || host;
   }
 
   validate(pkg: PublishPackage): PublishValidation {
-    return validateCommon(pkg, this.capabilities);
+    const result = validateCommon(pkg, this.capabilities);
+    if (!Number.isInteger(pkg.extras?.tid) || Number(pkg.extras?.tid) <= 0) {
+      result.issues.push({ field: 'extras.tid', message: '请选择 B 站投稿分区 ID' });
+    }
+    if (!pkg.tags.length || pkg.tags.join(',').length >= 200) {
+      result.issues.push({ field: 'tags', message: 'B 站标签不能为空且总长度须小于 200' });
+    }
+    result.ok = result.issues.length === 0;
+    return result;
   }
 
   async authStatus(): Promise<{ state: AuthState; expiresAt?: string; account?: string }> {
-    if (!this.creds.accessToken && !this.secretGet?.('bilibili.accessToken')) {
+    if (!(this.creds.accessToken || this.secretGet?.('bilibili.accessToken')) || !this.creds.clientId || !this.creds.clientSecret) {
       return { state: 'not_configured' };
     }
-    const token = this.creds.accessToken || this.secretGet?.('bilibili.accessToken');
-    if (!token) return { state: 'not_configured' };
-    if (this.creds.expiresAt && this.creds.expiresAt < Date.now()) {
-      return { state: 'expired', expiresAt: new Date(this.creds.expiresAt).toISOString() };
-    }
-    return {
-      state: 'ok',
-      expiresAt: this.creds.expiresAt ? new Date(this.creds.expiresAt).toISOString() : undefined,
-      account: this.creds.clientId,
-    };
+    const expiresAt = this.creds.expiresAt ? new Date(this.creds.expiresAt).toISOString() : undefined;
+    return { state: this.creds.expiresAt && this.creds.expiresAt < Date.now() ? 'expired' : 'ok', expiresAt, account: this.creds.clientId };
   }
 
   async beginAuth(): Promise<{ authorizeUrl: string; state: string }> {
-    const state = `bili-${Date.now()}`;
-    const redirect = process.env.ARTFLOW_BILIBILI_REDIRECT || 'http://127.0.0.1:3300/api/auth/bilibili/callback';
-    const authorizeUrl =
-      `https://account.bilibili.com/oauth2/authorize?client_id=${this.creds.clientId}` +
-      `&response_type=code&redirect_uri=${encodeURIComponent(redirect)}&state=${state}`;
-    return { authorizeUrl, state };
+    const state = randomUUID();
+    this.pendingState = state;
+    const query = new URLSearchParams({ client_id: this.creds.clientId, state,
+      gourl: process.env.ARTFLOW_BILIBILI_REDIRECT || 'http://127.0.0.1:3300/api/auth/bilibili/callback' });
+    return { authorizeUrl: 'https://account.bilibili.com/pc/account-pc/auth/oauth?' + query, state };
   }
 
   async completeAuth(input: { state: string; callback: string }): Promise<void> {
-    const url = new URL(input.callback.replace(/^bilibili:/, 'https://x.invalid/'));
+    const url = new URL(input.callback);
+    if (!this.pendingState || input.state !== this.pendingState || url.searchParams.get('state') !== this.pendingState) throw new Error('invalid OAuth state');
     const code = url.searchParams.get('code');
     if (!code) throw new Error('missing code');
-    const res = await fetch(`${this.baseUrl()}/oauth2/access_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        client_id: this.creds.clientId,
-        client_secret: this.creds.clientSecret,
-        code,
-      }),
-    });
-    const body = (await res.json()) as {
-      access_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
-    };
-    if (!body.access_token) throw new Error('token exchange failed');
-    this.creds.accessToken = body.access_token;
-    this.creds.refreshToken = body.refresh_token;
-    this.creds.expiresAt = Date.now() + (body.expires_in ?? 7200) * 1000;
+    await this.exchangeToken('token', { grant_type: 'authorization_code', code });
+    this.pendingState = undefined;
   }
 
   async refreshAuth(): Promise<void> {
     const refresh = this.creds.refreshToken || this.secretGet?.('bilibili.refreshToken');
     if (!refresh) throw new Error('no refresh token');
-    const res = await fetch(`${this.baseUrl()}/oauth2/refresh_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        client_id: this.creds.clientId,
-        client_secret: this.creds.clientSecret,
-        refresh_token: refresh,
-      }),
-    });
-    const body = (await res.json()) as {
-      access_token?: string;
-      refresh_token?: string;
-      expires_in?: number;
+    await this.exchangeToken('refresh_token', { grant_type: 'refresh_token', refresh_token: refresh });
+  }
+
+  private async exchangeToken(path: string, values: Record<string, string>): Promise<void> {
+    const query = new URLSearchParams({ ...values, client_id: this.creds.clientId, client_secret: this.creds.clientSecret });
+    const res = await fetch(this.base('https://api.bilibili.com') + '/x/account-oauth2/v1/' + path + '?' + query,
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    const body = await res.json() as { code?: number; data?: { access_token?: string; refresh_token?: string; expires_in?: number } };
+    if (!res.ok || body.code !== 0 || !body.data?.access_token || !body.data.expires_in) throw new Error('Bilibili token exchange failed');
+    this.creds.accessToken = body.data.access_token;
+    this.creds.refreshToken = body.data.refresh_token;
+    // B 站 expires_in 是 UTC 秒时间戳，不是有效期秒数。
+    this.creds.expiresAt = body.data.expires_in * 1000;
+  }
+
+  private headers(body: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'x-bili-accesskeyid': this.creds.clientId,
+      'x-bili-content-md5': createHash('md5').update(body).digest('hex'),
+      'x-bili-signature-method': 'HMAC-SHA256', 'x-bili-signature-nonce': randomUUID(),
+      'x-bili-signature-version': '2.0', 'x-bili-timestamp': String(Math.floor(Date.now() / 1000)),
     };
-    if (!body.access_token) throw new Error('refresh failed');
-    this.creds.accessToken = body.access_token;
-    this.creds.refreshToken = body.refresh_token;
-    this.creds.expiresAt = Date.now() + (body.expires_in ?? 7200) * 1000;
+    return { ...headers, Authorization: bilibiliSign(headers, this.creds.clientSecret),
+      'access-token': this.creds.accessToken || this.secretGet?.('bilibili.accessToken') || '', Accept: 'application/json' };
+  }
+
+  private async request<T>(url: string, body: string | FormData, opts: PublishOptions): Promise<T> {
+    const headers = this.headers(typeof body === 'string' ? body : '');
+    if (typeof body === 'string') headers['Content-Type'] = 'application/json';
+    const res = await fetch(url, { method: 'POST', headers, body: body || undefined, signal: opts.signal });
+    return this.response<T>(res);
+  }
+
+  private async response<T>(res: Response): Promise<T> {
+    const result = await res.json() as { code?: number; message?: string; data?: T };
+    if (!res.ok || result.code !== 0) throw new Error(result.message || `Bilibili HTTP ${res.status}, code ${result.code}`);
+    return result.data as T;
   }
 
   async publish(pkg: PublishPackage, opts: PublishOptions): Promise<PublishResult> {
     const validation = this.validate(pkg);
-    if (!validation.ok) {
-      return { status: 'failed', message: validation.issues.map((i) => i.message).join('; ') };
-    }
-    if (opts.dryRun) {
-      return { status: 'dry_run', message: 'bilibili dry-run' };
-    }
-    const status = await this.authStatus();
-    if (status.state === 'not_configured' || status.state === 'expired') {
-      try {
-        if (status.state === 'expired') await this.refreshAuth();
-      } catch {
-        return { status: 'auth_required', message: '需重新授权' };
+    if (!validation.ok) return { status: 'failed', message: validation.issues.map((i) => i.message).join('; ') };
+    if (opts.dryRun) return { status: 'dry_run', message: 'bilibili dry-run' };
+    if ((await this.authStatus()).state !== 'ok') return { status: 'auth_required', message: '需重新授权' };
+    let file: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      file = await open(pkg.videoPath, 'r');
+      const size = (await file.stat()).size;
+      if (!size || size > this.capabilities.maxSizeBytes!) throw new Error('invalid video size');
+      const cover = await readFile(pkg.coverPath);
+      const init = await this.request<{ upload_token: string }>(this.base() + '/arcopen/fn/archive/video/init', JSON.stringify({ name: basename(pkg.videoPath), utype: 0 }), opts);
+      if (!init?.upload_token) throw new Error('missing upload token');
+      const query = new URLSearchParams({ upload_token: init.upload_token });
+      const partSize = 10 * 1024 * 1024;
+      for (let offset = 0, part = 1; offset < size; part++) {
+        const chunk = Buffer.alloc(Math.min(partSize, size - offset));
+        const { bytesRead } = await file.read(chunk, 0, chunk.length, offset);
+        if (bytesRead !== chunk.length) throw new Error('video changed during upload');
+        const res = await fetch(this.base('https://openupos.bilivideo.com') + '/video/v2/part/upload?' + query + '&part_number=' + part,
+          { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Uint8Array(chunk), signal: opts.signal });
+        await this.response(res);
+        offset += bytesRead;
+        opts.onProgress?.(offset / size, 'Uploading video');
       }
-      if ((await this.authStatus()).state === 'not_configured') {
-        return { status: 'auth_required', message: '需重新授权' };
-      }
-    }
-    const token = this.creds.accessToken || this.secretGet?.('bilibili.accessToken') || '';
-    const ts = Math.floor(Date.now() / 1000);
-    const sign = bilibiliSign(
-      { title: pkg.title, desc: pkg.description },
-      this.creds.clientSecret,
-      ts
-    );
-    const res = await fetch(`${this.baseUrl()}/x/open-platform/v2/video/create`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'x-client-sign': sign,
-        'x-client-timestamp': String(ts),
-      },
-      body: JSON.stringify({
-        title: pkg.title,
-        desc: pkg.description,
-        tag: pkg.tags.join(','),
-        copyright: 1,
-        source: pkg.sources[0]?.url,
-      }),
-    });
-    const body = (await res.json()) as { code?: number; data?: { vid?: string; aid?: string }; message?: string };
-    if (!res.ok || (body.code !== undefined && body.code !== 0)) {
-      return { status: 'failed', message: body.message || `HTTP ${res.status}` };
-    }
-    return {
-      status: 'submitted',
-      remoteId: String(body.data?.vid ?? body.data?.aid ?? ''),
-      url: body.data?.aid ? `https://www.bilibili.com/video/av${body.data.aid}` : undefined,
-    };
+      await this.request(this.base() + '/arcopen/fn/archive/video/complete?' + query, '', opts);
+      const form = new FormData();
+      form.append('file', new Blob([cover]), basename(pkg.coverPath));
+      const uploadedCover = await this.request<{ url: string }>(this.base() + '/arcopen/fn/archive/cover/upload', form, opts);
+      if (!uploadedCover?.url) throw new Error('missing cover URL');
+      const result = await this.request<{ resource_id: string }>(this.base() + '/arcopen/fn/archive/add-by-utoken?' + query,
+        JSON.stringify({ title: pkg.title, desc: pkg.description, tag: pkg.tags.join(','), tid: pkg.extras!.tid,
+          cover: uploadedCover.url, copyright: pkg.extras?.copyright ?? 1, source: pkg.sources[0]?.url }), opts);
+      if (!result?.resource_id) throw new Error('Bilibili did not confirm submission');
+      return { status: 'submitted', remoteId: result.resource_id, url: 'https://www.bilibili.com/video/' + result.resource_id };
+    } catch (error) {
+      return { status: 'failed', message: error instanceof Error ? error.message : String(error) };
+    } finally { await file?.close(); }
   }
 }

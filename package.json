@@ -85,7 +85,7 @@
     "lint:strict": "eslint \"src/**/*.ts\" --max-warnings 0",
     "test:slow": "jest --runInBand --testMatch \"**/*slow.ts\" --testTimeout 180000",
     "test:fixture": "ARTFLOW_FIXTURE_MODE=1 jest src/__tests__/pixiv-provider src/__tests__/renderer",
-    "eval:ai": "node scripts/eval-ai.mjs"
+    "eval:ai": "npm run build && node scripts/eval-ai.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -131,6 +131,8 @@
   },
   "files": [
     "dist/",
+    "scripts/workflow-*.py",
+    "requirements-python.txt",
     "config/standalone.config.example.json",
     "README.md",
     "README_EN.md",

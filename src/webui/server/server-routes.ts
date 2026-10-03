@@ -31,9 +31,9 @@ export function setupRoutes(app: Express): void {
   app.use('/api/workflow', workflowRoutes);
   app.use('/api/system', systemRoutes);
   app.use('/api/publishers', publishersRoutes);
+  app.use('/api/metrics', metricsRoutes);
   app.use('/metrics', metricsRoutes);
 }
-
 
 
 

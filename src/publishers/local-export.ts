@@ -43,6 +43,7 @@ export class LocalExportPublisher implements Publisher {
       return { status: 'dry_run', message: 'local-export dry-run' };
     }
     const dir = join(this.dataDir, 'exports', pkg.taskId, 'local-export');
+    if (!existsSync(pkg.videoPath) || !existsSync(pkg.coverPath)) return { status: 'failed', message: 'video or cover file not found' };
     mkdirSync(dir, { recursive: true });
     if (existsSync(pkg.videoPath)) {
       copyFileSync(pkg.videoPath, join(dir, 'video.mp4'));
