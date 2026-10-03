@@ -26,7 +26,7 @@
     "refresh": "npm run build && node dist/index.js refresh",
     "download": "npm run build && node dist/index.js download",
     "scheduler": "npm run build && node dist/index.js scheduler",
-    "test": "jest --maxWorkers=2 --workerIdleMemoryLimit=128MB",
+    "test": "jest --maxWorkers=2",
     "test:scheduled": "jest --runTestsByPath src/__tests__/integration/download-flow.test.ts",
     "test:concurrency": "jest --runTestsByPath src/__tests__/utils/concurrency.test.ts",
     "test:performance": "jest --runInBand src/__tests__/performance",

@@ -70,11 +70,10 @@ echo "STUDIO=$STUDIO"
 run_step "core:npm-ci" npm_ci "$CORE"
 run_step "core:build" in_repo "$CORE" npm run build
 run_step "core:lint" in_repo "$CORE" npm run lint
-# Isolate native better-sqlite3 state: Jest runInBand can abort on Node 24 when
-# database suites share the same process; fresh workers also bound memory use.
 run_step "core:test:UTC" in_repo "$CORE" env TZ=UTC npm test -- --ci
 run_step "core:test:Asia/Shanghai" in_repo "$CORE" env TZ=Asia/Shanghai npm test -- --ci
 run_step "core:tooling" in_repo "$CORE" node --test scripts/dev/__tests__/tooling.test.mjs
+run_step "core:native-runtime" in_repo "$CORE" node --test scripts/dev/__tests__/native-runtime.test.mjs
 
 run_step "studio:npm-ci" npm_ci "$STUDIO"
 run_step "studio:build" in_repo "$STUDIO" npm run build

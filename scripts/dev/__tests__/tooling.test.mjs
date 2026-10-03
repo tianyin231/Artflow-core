@@ -62,12 +62,23 @@ test('readiness checks the API health contract without optional dependency probe
   assert.equal(command(process.execPath, [join(scripts, 'wait-healthy.mjs'), '--timeout', 'NaN']).code, 2);
 });
 
-async function freePort() {
-  const server = createServer();
-  await new Promise((done) => server.listen(0, '127.0.0.1', done));
-  const port = server.address().port;
-  await new Promise((done) => server.close(done));
-  return port;
+async function freePorts(count) {
+  // Hold every reservation until all ports have been selected; closing each
+  // one immediately lets the OS return the same port for the next service.
+  const servers = [];
+  try {
+    for (let i = 0; i < count; i++) {
+      const server = createServer();
+      await new Promise((done, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', done);
+      });
+      servers.push(server);
+    }
+    return servers.map((server) => server.address().port);
+  } finally {
+    await Promise.all(servers.map((server) => new Promise((done) => server.close(done))));
+  }
 }
 
 async function fakeStack(t, fixture = false) {
@@ -116,7 +127,7 @@ http.createServer((req, res) => {
     TEST_EXIT_FILE: join(directory, 'exit-core'),
   });
   if (fixture) env.ARTFLOW_DATA_DIR = join(directory, 'data "quotes" \\ path');
-  const ports = [await freePort(), await freePort(), await freePort()];
+  const ports = await freePorts(3);
   const child = spawn('bash', [join(core, 'scripts/dev/dev-stack.sh'), ...(fixture ? ['--fixture'] : []),
     '--mock-port', String(ports[0]), '--core-port', String(ports[1]), '--studio-port', String(ports[2])], { env });
   let output = '';
@@ -214,7 +225,7 @@ test('verify-all preserves checkout paths, records step failures and continues r
   const bin = join(directory, 'bin');
   for (const path of [join(core, 'scripts/dev'), studio, bin]) await fs.mkdir(path, { recursive: true });
   await fs.copyFile(join(scripts, 'verify-all.sh'), join(core, 'scripts/dev/verify-all.sh'));
-  const stub = '#!/bin/sh\nprintf "%s|%s|%s\\n" "$PWD" "$ARTFLOW_CORE_DIR" "$*" >> "$TEST_COMMAND_LOG"\nif [ "$PWD" = "$ARTFLOW_STUDIO_DIR" ] && [ "$*" = "run lint" ]; then exit 9; fi\nexit 0\n';
+  const stub = '#!/bin/sh\nprintf "%s|%s|%s\\n" "$PWD" "$ARTFLOW_CORE_DIR" "$*" >> "$TEST_COMMAND_LOG"\nif [ "$PWD" = "$ARTFLOW_STUDIO_DIR" ] && [ "$*" = "run lint" ]; then exit 9; fi\ncase "$*" in *native-runtime.test.mjs) exit 7;; esac\nexit 0\n';
   for (const name of ['npm', 'node']) await fs.writeFile(join(bin, name), stub, { mode: 0o755 });
   await fs.writeFile(join(bin, 'docker'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   const log = join(directory, 'commands.log');
@@ -224,6 +235,7 @@ test('verify-all preserves checkout paths, records step failures and continues r
   assert.equal(result.code, 1, result.output);
   const summary = await fs.readFile(join(core, '.artflow-dev/verify/verify-summary.txt'), 'utf8');
   assert.match(summary, /FAIL  studio:lint.*rc=9/);
+  assert.match(summary, /FAIL  core:native-runtime.*rc=7/);
   assert.match(summary, /PASS  secrets:scan/);
   assert.match(summary, /OVERALL: FAIL/);
   const calls = (await fs.readFile(log, 'utf8')).trim().split('\n');
