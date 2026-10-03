@@ -54,6 +54,7 @@ function isTestSource(file) {
 }
 
 const findings = [];
+const errors = [];
 
 function isTextFile(file) {
   const ext = path.extname(file).toLowerCase();
@@ -96,12 +97,19 @@ function walk(dir) {
 }
 
 function scanGitHistory(repoDir, label) {
-  if (!fs.existsSync(path.join(repoDir, '.git'))) return;
+  if (!fs.existsSync(path.join(repoDir, '.git'))) {
+    errors.push(`${label}: git checkout missing at ${repoDir}`);
+    return;
+  }
   const res = spawnSync(
     'git',
     ['-C', repoDir, 'log', '-p', '--no-color', SCAN_REF],
     { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 },
   );
+  if (res.error || res.status !== 0) {
+    errors.push(`${label}: git history scan failed (check ARTFLOW_SCAN_REF)`);
+    return;
+  }
   const out = `${res.stdout || ''}`;
   // Split into per-file patches; ignore test sources (sentinel injection points).
   const chunks = out.split(/^diff --git /m);
@@ -135,13 +143,15 @@ for (const d of extraLogs) walk(d);
 scanGitHistory(CORE, 'Artflow-core');
 scanGitHistory(STUDIO, 'Artflow-studio');
 
-if (findings.length === 0) {
+if (findings.length === 0 && errors.length === 0) {
   console.log('scan-secrets: OK — 0 sentinel leaks');
   process.exit(0);
 }
 
 console.error('scan-secrets: FAILED — sentinel leaks found:');
+for (const error of errors) console.error(`  [scan-error] ${error}`);
 for (const f of findings) {
-  console.error(`  [${f.kind}] ${f.path}: ${f.sentinel}`);
+  // Do not reproduce the leaked value in the scan log itself.
+  console.error(`  [${f.kind}] ${f.path}: sentinel #${SENTINELS.indexOf(f.sentinel) + 1}`);
 }
 process.exit(1);

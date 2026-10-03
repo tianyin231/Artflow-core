@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { CliTokenImporter } from '../../auth/PixivLoginService';
 
-const FAKE = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv');
+const FAKE = join(__dirname, '..', '..', '..', 'test', 'fakes', 'fake-pixiv.cjs');
 
 const SENTINEL = ['SENTINEL', '_rt_', '7f3a9c'].join('');
 
@@ -17,12 +17,12 @@ function makeRunner(home: string) {
   const run = (args: string[], stdin?: string) =>
     new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       const child = execFile(
-        FAKE,
-        args,
+        process.execPath,
+        [FAKE, ...args],
         { env: { ...process.env, HOME: home, FAKE_PIXIV_ARGV_LOG: argvLog, FAKE_PIXIV_SCENARIO: 'ok' }, shell: false },
         (err, stdout, stderr) => {
           const code = (err as { code?: number } | null)?.code ?? 0;
-          resolve({ code: Number(code) || 0, stdout: String(stdout), stderr: String(stderr) });
+          resolve({ code: err ? Number(code) || 1 : 0, stdout: String(stdout), stderr: String(stderr) });
         }
       );
       if (stdin !== undefined && child.stdin) {
@@ -61,7 +61,7 @@ describe('CliTokenImporter', () => {
     const importer = new CliTokenImporter(run);
     const accounts = await importer.listAccounts();
     expect(accounts.length).toBeGreaterThan(0);
-    expect(accounts[0].userId).toBeTruthy();
+    expect(accounts[0]).toEqual({ userId: '1', name: 'Fake User', isDefault: true });
   });
 
   it('check returns authenticated', async () => {

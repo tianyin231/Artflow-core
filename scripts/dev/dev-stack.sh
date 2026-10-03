@@ -24,9 +24,17 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --fixture) FIXTURE=1; shift ;;
     --prod) PROD=1; shift ;;
-    --mock-port) MOCK_PORT="$2"; shift 2 ;;
-    --core-port) CORE_PORT="$2"; shift 2 ;;
-    --studio-port) STUDIO_PORT="$2"; shift 2 ;;
+    --mock-port|--core-port|--studio-port)
+      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]] || (( 10#$2 < 1 || 10#$2 > 65535 )); then
+        echo "[dev-stack] ERROR: $1 requires a port between 1 and 65535" >&2
+        exit 2
+      fi
+      case "$1" in
+        --mock-port) MOCK_PORT="$2" ;;
+        --core-port) CORE_PORT="$2" ;;
+        --studio-port) STUDIO_PORT="$2" ;;
+      esac
+      shift 2 ;;
     *) echo "unknown arg $1"; exit 2 ;;
   esac
 done
@@ -47,9 +55,12 @@ cleanup() {
   sleep 1
   for pid in "${PIDS[@]}"; do
     kill -KILL -- "-$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
   done
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 port_busy() {
   local port="$1"
@@ -66,6 +77,10 @@ for p in "$MOCK_PORT" "$CORE_PORT" "$STUDIO_PORT"; do
     exit 1
   fi
 done
+if [ "$MOCK_PORT" = "$CORE_PORT" ] || [ "$MOCK_PORT" = "$STUDIO_PORT" ] || [ "$CORE_PORT" = "$STUDIO_PORT" ]; then
+  echo "[dev-stack] ERROR: mock, core and studio ports must differ" >&2
+  exit 2
+fi
 
 if [ "$FIXTURE" = "1" ]; then
   export ARTFLOW_FIXTURE_MODE=1
@@ -92,30 +107,39 @@ if ! kill -0 "$MOCK_PID" 2>/dev/null; then
 fi
 
 echo "[dev-stack] building core"
-(cd "$CORE" && npm run build) || exit 1
+BUILD_PIDS=("${PIDS[@]}")
+(cd "$CORE" && exec npm run build) &
+BUILD_PID=$!
+PIDS+=("$BUILD_PID")
+wait "$BUILD_PID" || exit $?
+PIDS=("${BUILD_PIDS[@]}")
 
 export PORT="$CORE_PORT"
 export ARTFLOW_CORE_PORT="$CORE_PORT"
-export ARTFLOW_CONFIG="${ARTFLOW_CONFIG:-$ARTFLOW_DATA_DIR/config/standalone.config.json}"
 if [ "$FIXTURE" = "1" ]; then
+  export ARTFLOW_CONFIG="${ARTFLOW_CONFIG:-$ARTFLOW_DATA_DIR/config/standalone.config.json}"
   mkdir -p "$(dirname "$ARTFLOW_CONFIG")"
   if [ ! -f "$ARTFLOW_CONFIG" ]; then
-    cat > "$ARTFLOW_CONFIG" <<CFG
-{
-  "pixiv": {
-    "clientId": "fixture", "clientSecret": "fixture", "deviceToken": "fixture",
-    "refreshToken": "", "userAgent": "ArtflowFixture/1.0", "provider": "fixture"
+    node <<'JS'
+const { writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+const dataDir = process.env.ARTFLOW_DATA_DIR;
+const config = {
+  pixiv: {
+    clientId: 'fixture', clientSecret: 'fixture', deviceToken: 'fixture',
+    refreshToken: '', userAgent: 'ArtflowFixture/1.0', provider: 'fixture',
   },
-  "targets": [],
-  "runtime": { "fixtureMode": true, "python": null, "timezone": "Asia/Tokyo" },
-  "storage": {
-    "downloadDirectory": "$ARTFLOW_DATA_DIR/downloads",
-    "illustrationDirectory": "$ARTFLOW_DATA_DIR/downloads/illustrations",
-    "novelDirectory": "$ARTFLOW_DATA_DIR/downloads/novels",
-    "databasePath": "$ARTFLOW_DATA_DIR/artflow.db"
-  }
-}
-CFG
+  targets: [],
+  runtime: { fixtureMode: true, python: null, timezone: 'Asia/Tokyo' },
+  storage: {
+    downloadDirectory: join(dataDir, 'downloads'),
+    illustrationDirectory: join(dataDir, 'downloads', 'illustrations'),
+    novelDirectory: join(dataDir, 'downloads', 'novels'),
+    databasePath: join(dataDir, 'artflow.db'),
+  },
+};
+writeFileSync(process.env.ARTFLOW_CONFIG, JSON.stringify(config, null, 2));
+JS
   fi
 fi
 
@@ -144,11 +168,37 @@ if ! kill -0 "$STUDIO_PID" 2>/dev/null; then
   exit 1
 fi
 
+SERVICE_PIDS=("${PIDS[@]}")
+check_services() {
+  for pid in "${SERVICE_PIDS[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rc=0
+      wait "$pid" || rc=$?
+      echo "[dev-stack] ERROR: service $pid exited (status $rc)" >&2
+      if [ "$rc" -eq 0 ]; then rc=1; fi
+      exit "$rc"
+    fi
+  done
+}
+
 node "$CORE/scripts/dev/wait-healthy.mjs" \
   --core "http://127.0.0.1:${CORE_PORT}" \
   --studio "http://127.0.0.1:${STUDIO_PORT}" \
-  --timeout 60 || exit 1
+  --mock "http://127.0.0.1:${MOCK_PORT}" \
+  --timeout 60 &
+HEALTH_PID=$!
+PIDS+=("$HEALTH_PID")
+while kill -0 "$HEALTH_PID" 2>/dev/null; do
+  check_services
+  sleep 0.2
+done
+wait "$HEALTH_PID" || exit $?
+PIDS=("${SERVICE_PIDS[@]}")
 
 echo "[dev-stack] ready: core=127.0.0.1:${CORE_PORT} studio=127.0.0.1:${STUDIO_PORT} mock=127.0.0.1:${MOCK_PORT}"
-# Keep foreground
-wait
+# Keep foreground and fail when any service exits, even if it exits cleanly.
+# `wait` without arguments waits for every child and hides individual failures.
+while true; do
+  check_services
+  sleep 0.2
+done

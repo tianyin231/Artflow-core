@@ -12,7 +12,7 @@ Make Pixiv artwork collection elegant and efficient | 让 Pixiv 作品收集变�
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-blue.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B%20LTS-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.14%2B%20LTS-green.svg?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)](https://github.com/zoidberg-xgd/pixivflow)
 [![Maintenance](https://img.shields.io/badge/Maintained-yes-green.svg?style=flat-square)](https://github.com/zoidberg-xgd/pixivflow/graphs/commit-activity)
 
@@ -172,12 +172,12 @@ Compared to other Pixiv downloaders, PixivFlow focuses on **automation** and **s
 <a id="requirements"></a>
 ### Requirements
 
-- **Node.js 18+** and **npm 9+** (Recommended: LTS versions 18.x, 20.x, 22.x, or 24.x)
+- **Node.js 22.14+** and **npm 9+** (Recommended: LTS versions 22.x or 24.x; the native database requires Node-API 10)
 - **Pixiv account**
 - **Windows users**: Recommended to use WSL (`wsl --install`) or Git Bash
 
 > ⚠️ **Node.js Version Note**:
-> - Recommended to use **LTS (Long Term Support) versions**: 18.x, 20.x, 22.x, or 24.x
+> - Recommended to use **LTS (Long Term Support) versions**: 22.x or 24.x
 > - Avoid using odd-numbered versions (e.g., 19.x, 21.x, 23.x), as these may not be supported by all dependencies
 > - If you see `EBADENGINE` warnings, consider switching to an LTS version
 > 
@@ -1568,4 +1568,3 @@ Made with ❤️ by [zoidberg-xgd](https://github.com/zoidberg-xgd)
 [⬆ Back to Top](#-pixivflow)
 
 </div>
-

@@ -90,6 +90,9 @@ router.post('/:id/dry-run', async (req: Request, res: Response) => {
       return res.status(404).json({ error: `unknown publisher ${id}` });
     }
     const body = req.body as Partial<PublishPackage>;
+    if (body.extras !== undefined && (body.extras === null || typeof body.extras !== 'object' || Array.isArray(body.extras))) {
+      return res.status(400).json({ error: 'extras must be an object' });
+    }
     const pkg: PublishPackage = {
       taskId: body.taskId || 'ui-dryrun',
       videoPath: body.videoPath || '',
@@ -101,6 +104,7 @@ router.post('/:id/dry-run', async (req: Request, res: Response) => {
       durationSec: body.durationSec ?? 1,
       sizeBytes: body.sizeBytes ?? 1,
       sources: body.sources || [],
+      extras: body.extras,
     };
     const result = await jobs.run(pkg, id, { dryRun: true });
     return res.json({ data: result });

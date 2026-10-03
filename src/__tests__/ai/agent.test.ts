@@ -43,6 +43,25 @@ describe('AiAgent mock scenarios', () => {
     const r = await agent.plan('x');
     expect(validatePlan(r.plan).ok).toBe(true);
   });
+
+  it.each(['timeout', 'malformed', 'refusal'] as const)('reports actual local fallback for a configured provider (%s)', async (scenario) => {
+    const result = await new AiAgent(mockLlm(scenario), { provider: 'openai' }).plan('初音ミク');
+    expect(result.provider).toBe('local-rules');
+    expect(result.steps.some((step) => step.name === 'fallback-local' && step.ok)).toBe(true);
+  });
+
+  it('revises schema-invalid JSON instead of returning unsafe fields', async () => {
+    const complete = jest.fn()
+      .mockResolvedValueOnce({ text: '{"pixivTarget":{"tag":"x"},"video":{"title":"t","secondsPerImage":-10}}', promptTokens: 5, completionTokens: 5 })
+      .mockResolvedValueOnce({ text: '{"pixivTarget":{"tag":"初音ミク"},"video":{"title":"Revised","secondsPerImage":2}}', promptTokens: 7, completionTokens: 6 });
+    const result = await new AiAgent({ complete }, { provider: 'mock' }).plan('初音ミク 图集');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1][0]).toContain('User: 初音ミク 图集');
+    expect(result.plan.video.secondsPerImage).toBe(2);
+    expect(result.steps).toContainEqual({ name: 'revise', ok: true });
+    expect(result.tokens).toMatchObject({ prompt: 12, completion: 11 });
+    expect(result.provider).toBe('mock');
+  });
 });
 
 describe('providers and prompts', () => {

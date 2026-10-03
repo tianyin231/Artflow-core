@@ -56,4 +56,33 @@ describe('workflow templates', () => {
       expect(errors).toEqual([]);
     }
   });
+
+  it.each([
+    null, [],
+    { version: 'workflow-template.v1', id: 'x', name: 'x', nodes: {}, edges: [] },
+    { version: 'workflow-template.v1', id: 'x', name: 'x', nodes: [null], edges: [null] },
+    { version: 'workflow-template.v1', id: 'x', name: 'x', nodes: [{ id: 'a', kind: 'unknown' }], edges: [] },
+    { version: 'workflow-template.v1', id: 'x', name: 'x', nodes: [{ id: 'a', kind: 'source' }], edges: {} },
+  ])('returns validation errors without throwing for malformed import %#', (input) => {
+    expect(validateTemplate(input).ok).toBe(false);
+    expect(compile(input as typeof BUILTIN_TEMPLATES[0]).order).toEqual([]);
+  });
+
+  it('rejects duplicate node identifiers before compiling an ambiguous graph', () => {
+    const duplicate = { ...BUILTIN_TEMPLATES[0], nodes: [BUILTIN_TEMPLATES[0].nodes[0], BUILTIN_TEMPLATES[0].nodes[0]], edges: [] };
+    expect(validateTemplate(duplicate).errors).toContain('duplicate node src');
+    expect(compile(duplicate).order).toEqual([]);
+  });
+
+  it('substitutes nested parameters and defaults without mutating the original', () => {
+    const template = {
+      ...BUILTIN_TEMPLATES[0], variables: { tag: 'default' },
+      nodes: [{ id: 'src', kind: 'source' as const, params: { nested: { tags: ['{{tag}}', '{{toString}}'] } } }], edges: [],
+    };
+    const filled = applyVars(template, { tag: '初音ミク' });
+    expect(filled.nodes[0].params).toEqual({ nested: { tags: ['初音ミク', '{{toString}}'] } });
+    expect(applyVars(template, {}).nodes[0].params).toEqual({ nested: { tags: ['default', '{{toString}}'] } });
+    (filled.nodes[0].params!.nested as { tags: string[] }).tags.push('extra');
+    expect(template.nodes[0].params.nested.tags).toHaveLength(2);
+  });
 });

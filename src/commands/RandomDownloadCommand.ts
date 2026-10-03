@@ -150,7 +150,7 @@ export class RandomDownloadCommand extends BaseCommand {
 
         const auth = new PixivAuth(config.pixiv, config.network!, database, resolvedConfigPath);
         const pixivClient = new PixivClient(auth, config);
-        const fileService = new FileService(config.storage!);
+        const fileService = new FileService(config.storage!, config.runtime?.timezone);
         const downloadManager = new DownloadManager(tempConfig, pixivClient, database, fileService);
 
         await downloadManager.initialise();

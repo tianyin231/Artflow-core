@@ -45,8 +45,10 @@ webui-frontend/node_modules
 webui-frontend/dist
 webui-frontend/.vite
 
-# 脚本文件（在 Docker 中不需要）
-scripts/
+# Keep API build/render inputs; exclude unrelated maintenance scripts.
+scripts/*
+!scripts/create-webui-package-json.js
+!scripts/workflow*.py
 
 # 其他
 .env
@@ -55,3 +57,8 @@ scripts/
 *.key
 *.crt
 
+# Local review/fixture state and Python environments are never image inputs.
+.artflow-dev/
+.venv/
+coverage/
+test-results/

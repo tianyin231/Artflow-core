@@ -18,51 +18,73 @@ export interface WorkflowTemplate {
 
 export function validateTemplate(t: unknown): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
-  const o = t as WorkflowTemplate;
-  if (!o || typeof o !== 'object') return { ok: false, errors: ['not an object'] };
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const nonempty = (value: unknown): value is string => typeof value === 'string' && Boolean(value.trim());
+  if (!record(t)) return { ok: false, errors: ['not an object'] };
+  const o = t;
   if (o.version !== 'workflow-template.v1') errors.push('bad version');
-  if (!o.id) errors.push('missing id');
+  if (!nonempty(o.id)) errors.push('missing id');
+  if (!nonempty(o.name)) errors.push('missing name');
   if (!Array.isArray(o.nodes) || o.nodes.length === 0) errors.push('nodes required');
   if (!Array.isArray(o.edges)) errors.push('edges required');
-  const ids = new Set((o.nodes || []).map((n) => n.id));
-  for (const e of o.edges || []) {
-    if (!ids.has(e.from) || !ids.has(e.to)) errors.push(`edge ${e.from}->${e.to} dangling`);
+  if (o.variables !== undefined && (!record(o.variables) || Object.values(o.variables).some((value) => typeof value !== 'string'))) {
+    errors.push('variables must be an object of strings');
   }
-  // cycle detection
+  const ids = new Set<string>();
+  const kinds = ['source', 'filter', 'review', 'ai-plan', 'cover', 'render', 'publish', 'notify'];
+  for (const node of Array.isArray(o.nodes) ? o.nodes : []) {
+    if (!record(node) || !nonempty(node.id)) {
+      errors.push('node id required');
+      continue;
+    }
+    if (ids.has(node.id)) errors.push(`duplicate node ${node.id}`);
+    ids.add(node.id);
+    if (typeof node.kind !== 'string' || !kinds.includes(node.kind)) errors.push(`node ${node.id} has invalid kind`);
+    if (node.params !== undefined && !record(node.params)) errors.push(`node ${node.id} params must be an object`);
+  }
   const adj = new Map<string, string[]>();
-  for (const e of o.edges || []) {
-    adj.set(e.from, [...(adj.get(e.from) || []), e.to]);
+  const indeg = new Map([...ids].map((id) => [id, 0]));
+  for (const edge of Array.isArray(o.edges) ? o.edges : []) {
+    if (!record(edge) || !nonempty(edge.from) || !nonempty(edge.to)) {
+      errors.push('edge from and to required');
+      continue;
+    }
+    if (!ids.has(edge.from) || !ids.has(edge.to)) {
+      errors.push(`edge ${edge.from}->${edge.to} dangling`);
+      continue;
+    }
+    adj.set(edge.from, [...(adj.get(edge.from) || []), edge.to]);
+    indeg.set(edge.to, indeg.get(edge.to)! + 1);
   }
-  const seen = new Set<string>();
-  const stack = new Set<string>();
-  const visit = (id: string): boolean => {
-    if (stack.has(id)) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    stack.add(id);
-    for (const n of adj.get(id) || []) if (visit(n)) return true;
-    stack.delete(id);
-    return false;
-  };
-  for (const n of o.nodes || []) {
-    if (visit(n.id)) {
-      errors.push('cycle detected');
-      break;
+  const queue = [...indeg].filter(([, degree]) => degree === 0).map(([id]) => id);
+  for (let index = 0; index < queue.length; index++) {
+    for (const id of adj.get(queue[index]) || []) {
+      indeg.set(id, indeg.get(id)! - 1);
+      if (indeg.get(id) === 0) queue.push(id);
     }
   }
+  if (queue.length !== ids.size) errors.push('cycle detected');
   return { ok: errors.length === 0, errors };
 }
 
 export function applyVars(tpl: WorkflowTemplate, vars: Record<string, string>): WorkflowTemplate {
-  const sub = (s: string) => s.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? `{{${k}}}`);
+  const values = { ...tpl.variables, ...vars };
+  const sub = (s: string) => s.replace(/\{\{(\w+)\}\}/g, (_, k) => Object.hasOwn(values, k) ? values[k] : `{{${k}}}`);
+  const fill = (value: unknown): unknown => {
+    if (typeof value === 'string') return sub(value);
+    if (Array.isArray(value)) return value.map(fill);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, fill(nested)]));
+    }
+    return value;
+  };
   return {
     ...tpl,
     name: sub(tpl.name),
     nodes: tpl.nodes.map((n) => ({
       ...n,
-      params: Object.fromEntries(
-        Object.entries(n.params || {}).map(([k, v]) => [k, typeof v === 'string' ? sub(v) : v])
-      ),
+      params: fill(n.params || {}) as Record<string, unknown>,
     })),
   };
 }

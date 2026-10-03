@@ -1,7 +1,7 @@
 /**
  * @slow — MoviePy renderer integration (run via npm run test:slow)
  */
-import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -18,7 +18,7 @@ function makePng(path: string, color: [number, number, number]): void {
 }
 
 describe('MoviePyRenderer @slow', () => {
-  it('renders 3 images at 720p for ~6s', async () => {
+  it('honors short clips and reports the encoded duration and dimensions', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'artflow-moviepy-'));
     const images: string[] = [];
     const colors: Array<[number, number, number]> = [
@@ -34,7 +34,7 @@ describe('MoviePyRenderer @slow', () => {
     const renderer = new MoviePyRenderer();
     const out = await renderer.render(
       { images },
-      { secondsPerImage: 2, width: 1280, height: 720, fps: 24, title: 'Artflow MoviePy Smoke' },
+      { secondsPerImage: 0.5, totalDurationSec: 1.5, width: 320, height: 180, fps: 12, title: 'Artflow MoviePy Smoke' },
       tmp
     );
     expect(existsSync(out.videoPath)).toBe(true);
@@ -44,7 +44,17 @@ describe('MoviePyRenderer @slow', () => {
       { encoding: 'utf8' }
     );
     const dur = Number(probe.trim());
-    expect(dur).toBeGreaterThan(1);
-    expect(dur).toBeLessThan(30);
+    expect(Math.abs(dur - 1.5)).toBeLessThanOrEqual(1 / 12);
+    expect(out.durationSec).toBe(dur);
+    expect(out.width).toBe(320);
+    expect(out.height).toBe(180);
   }, 180000);
+
+  it('returns a finite duration when secondsPerImage is omitted', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'artflow-moviepy-default-'));
+    const image = join(tmp, 'image.png');
+    makePng(image, [200, 80, 80]);
+    const out = await new MoviePyRenderer().render({ images: [image] }, { width: 320, height: 180, fps: 12 }, tmp);
+    expect(out.durationSec).toBeCloseTo(4, 1);
+  }, 30000);
 });

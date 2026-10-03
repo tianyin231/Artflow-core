@@ -8,18 +8,20 @@ export interface SubtitleCue {
 }
 
 function fmtSrt(t: number): string {
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const s = Math.floor(t % 60);
-  const ms = Math.round((t % 1) * 1000);
+  const ticks = Math.max(0, Math.round(t * 1000));
+  const h = Math.floor(ticks / 3_600_000);
+  const m = Math.floor(ticks / 60_000) % 60;
+  const s = Math.floor(ticks / 1000) % 60;
+  const ms = ticks % 1000;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
 function fmtAss(t: number): string {
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const s = t % 60;
-  return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
+  const ticks = Math.max(0, Math.round(t * 100));
+  const h = Math.floor(ticks / 360_000);
+  const m = Math.floor(ticks / 6000) % 60;
+  const s = Math.floor(ticks / 100) % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ticks % 100).padStart(2, '0')}`;
 }
 
 export function toSrt(cues: SubtitleCue[]): string {
@@ -31,7 +33,7 @@ export function toSrt(cues: SubtitleCue[]): string {
 export function toAss(cues: SubtitleCue[], title = 'Artflow'): string {
   const header = [
     '[Script Info]',
-    `Title: ${title}`,
+    `Title: ${title.replace(/[\r\n]/g, ' ')}`,
     'ScriptType: v4.00+',
     'PlayResX: 1920',
     'PlayResY: 1080',
@@ -44,14 +46,14 @@ export function toAss(cues: SubtitleCue[], title = 'Artflow'): string {
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ].join('\n');
   const events = cues
-    .map((c) => `Dialogue: 0,${fmtAss(c.startSec)},${fmtAss(c.endSec)},Default,,0,0,0,,${c.text}`)
+    .map((c) => `Dialogue: 0,${fmtAss(c.startSec)},${fmtAss(c.endSec)},Default,,0,0,0,,${c.text.replace(/\\/g, '\\\\').replace(/{/g, '\\{').replace(/}/g, '\\}').replace(/\r?\n/g, '\\N')}`)
     .join('\n');
   return `${header}\n${events}\n`;
 }
 
 export function parseSrt(srt: string): SubtitleCue[] {
   const cues: SubtitleCue[] = [];
-  const blocks = srt.split(/\n\s*\n/);
+  const blocks = srt.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').split(/\n\s*\n/);
   for (const b of blocks) {
     const lines = b.trim().split('\n');
     if (lines.length < 2) continue;
@@ -59,8 +61,8 @@ export function parseSrt(srt: string): SubtitleCue[] {
     if (!timeLine) continue;
     const [a, bb] = timeLine.split('-->').map((x) => x.trim());
     const parse = (s: string) => {
-      const m = s.match(/(\d+):(\d+):(\d+)[.,](\d+)/);
-      if (!m) return 0;
+      const m = s.match(/^(\d+):([0-5]\d):([0-5]\d)[.,](\d{3})$/);
+      if (!m) return NaN;
       return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(m[4]) / 1000;
     };
     cues.push({ startSec: parse(a), endSec: parse(bb), text: lines.slice(lines.indexOf(timeLine) + 1).join('\n') });
@@ -73,6 +75,7 @@ export function validateSrt(srt: string): { ok: boolean; errors: string[] } {
   const cues = parseSrt(srt);
   if (cues.length === 0) errors.push('no cues');
   for (const c of cues) {
+    if (!Number.isFinite(c.startSec) || !Number.isFinite(c.endSec)) errors.push('invalid timestamp');
     if (c.endSec < c.startSec) errors.push(`end before start: ${c.text.slice(0, 20)}`);
     if (!c.text.trim()) errors.push('empty text');
   }
