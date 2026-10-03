@@ -3,7 +3,7 @@
  * Tokens never appear in argv; import goes through stdin.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { PixivProvider } from '../pixiv-provider/types';
+import { parseAccounts } from '../pixiv-provider/protocol';
 import { CLIENT_ID, CLIENT_SECRET } from '../terminal-login/constants';
 
 export interface LoginStartResult {
@@ -59,6 +59,7 @@ export interface TokenImporter {
   listAccounts(): Promise<{ userId: string; name?: string; isDefault: boolean }[]>;
   useAccount(uid: string): Promise<void>;
   check(): Promise<{ authenticated: boolean }>;
+  logout(): Promise<void>;
 }
 
 export class PixivLoginService {
@@ -160,9 +161,11 @@ export class PixivLoginService {
   async check() {
     return this.importer.check();
   }
+
+  async logout() { await this.importer.logout(); }
 }
 
-/** In-memory importer used by tests and when provider has no CLI. */
+/** In-memory importer for explicitly enabled fixture mode and tests only. */
 export class MemoryTokenImporter implements TokenImporter {
   tokens: string[] = [];
   accounts: { userId: string; name?: string; isDefault: boolean }[] = [];
@@ -183,11 +186,14 @@ export class MemoryTokenImporter implements TokenImporter {
     return this.accounts;
   }
   async useAccount(uid: string) {
+    if (!this.accounts.some((a) => a.userId === uid)) throw new Error('account not found');
+    this.accounts.forEach((a) => { a.isDefault = a.userId === uid; });
     this.active = uid;
   }
   async check() {
     return { authenticated: this.tokens.length > 0 };
   }
+  async logout() { this.tokens = []; this.accounts = []; this.active = undefined; }
 }
 
 /** Importer that delegates to pixiv-cli via a provider-like exec. */
@@ -206,25 +212,22 @@ export class CliTokenImporter implements TokenImporter {
   }
   async listAccounts() {
     const res = await this.run(['auth', 'list', '--json']);
-    if (res.code !== 0) return [];
-    try {
-      const parsed = JSON.parse(res.stdout || '[]');
-      return Array.isArray(parsed)
-        ? parsed.map((a: Record<string, unknown>, i: number) => ({
-            userId: String(a.userId ?? a.id ?? i),
-            name: a.name ? String(a.name) : undefined,
-            isDefault: Boolean(a.isDefault ?? i === 0),
-          }))
-        : [];
-    } catch {
-      return [];
-    }
+    if (res.code !== 0) throw new Error(res.stderr || 'auth list failed');
+    return parseAccounts(JSON.parse(res.stdout)).accounts;
   }
   async useAccount(uid: string) {
-    await this.run(['auth', 'use', uid, '--json']);
+    const res = await this.run(['auth', 'use', uid, '--json']);
+    if (res.code !== 0) throw new Error(res.stderr || 'auth use failed');
   }
   async check() {
-    const res = await this.run(['auth', 'check', '--json']);
-    return { authenticated: res.code === 0 };
+    const res = await this.run(['auth', 'list', '--json']);
+    if (res.code !== 0) return { authenticated: false };
+    return { authenticated: parseAccounts(JSON.parse(res.stdout)).authenticated };
+  }
+  async logout() {
+    const account = (await this.listAccounts()).find((a) => a.isDefault);
+    if (!account) return;
+    const res = await this.run(['auth', 'remove', account.userId, '--yes', '--json']);
+    if (res.code !== 0) throw new Error(res.stderr || 'auth remove failed');
   }
 }

@@ -52,7 +52,7 @@ export class NormalizeCommand extends BaseCommand {
       database = new Database(config.storage!.databasePath!);
       database.migrate();
 
-      const fileService = new FileService(config.storage!);
+      const fileService = new FileService(config.storage!, config.runtime?.timezone);
       const normalizationService = new FileNormalizationService(
         config.storage!,
         fileService,
