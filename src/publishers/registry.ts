@@ -71,7 +71,7 @@ export class PublishJobService {
     const key = this.key(pkg.taskId, publisherId);
     const existing = this.jobs.get(key);
     // idempotent: success already recorded
-    if (existing && ['published', 'exported', 'submitted', 'dry_run'].includes(existing.status)) {
+    if (existing && (['published', 'exported', 'submitted'].includes(existing.status) || (opts.dryRun && existing.status === 'dry_run'))) {
       return existing.lastResult ?? { status: 'exported' };
     }
     const publisher = this.registry.get(publisherId);

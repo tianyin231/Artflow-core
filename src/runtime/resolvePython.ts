@@ -4,7 +4,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export interface ResolvePythonOptions {
   /** Explicit config value (config.runtime.python) */
@@ -35,8 +35,9 @@ export function resolvePython(options: ResolvePythonOptions = {}): string {
   const fromEnv = process.env.ARTFLOW_PYTHON;
   if (fromEnv) candidates.push(fromEnv);
   if (options.configured) candidates.push(options.configured);
-  candidates.push(join(projectRoot, '..', '.venv', 'bin', 'python'));
-  candidates.push(join(projectRoot, '.venv', 'bin', 'python'));
+  const venvPython = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python'];
+  candidates.push(join(projectRoot, '..', '.venv', ...venvPython));
+  candidates.push(join(projectRoot, '.venv', ...venvPython));
   candidates.push('python3');
   candidates.push('python');
 

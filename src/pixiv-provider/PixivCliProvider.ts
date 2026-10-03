@@ -4,8 +4,8 @@
  * Never uses a shell. Tokens must never appear in argv.
  */
 import { execFile } from 'node:child_process';
-import { promises as fs, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { join, basename, extname } from 'node:path';
 import {
   DownloadResult,
   PixivAuthStatus,
@@ -15,7 +15,10 @@ import {
   WorkQuery,
 } from './types';
 
+import { normalizeWork, parseAccounts } from './protocol';
+
 export interface PixivCliOptions {
+  args?: string[];
   cliPath: string;
   cliHome?: string | null;
   timeoutMs?: number;
@@ -59,6 +62,7 @@ export class PixivCliProvider implements PixivProvider {
 
   constructor(options: PixivCliOptions) {
     this.opts = {
+      args: options.args ?? [],
       cliPath: options.cliPath,
       cliHome: options.cliHome,
       timeoutMs: options.timeoutMs ?? 30000,
@@ -68,7 +72,7 @@ export class PixivCliProvider implements PixivProvider {
     if (!this.opts.cliPath) {
       throw new PixivProviderError('BINARY_MISSING', 'pixiv-cli path is required');
     }
-    if (this.opts.cliPath.includes('/') && !existsSync(this.opts.cliPath)) {
+    if ((this.opts.cliPath.includes('/') || this.opts.cliPath.includes('\\')) && !existsSync(this.opts.cliPath)) {
       throw new PixivProviderError('BINARY_MISSING', `pixiv-cli not found at ${this.opts.cliPath}`);
     }
   }
@@ -79,7 +83,7 @@ export class PixivCliProvider implements PixivProvider {
       PIXIV_LOG_FORMAT: 'json',
       ...this.opts.env,
     };
-    if (this.opts.cliHome) env.HOME = this.opts.cliHome;
+    if (this.opts.cliHome) { env.HOME = this.opts.cliHome; env.USERPROFILE = this.opts.cliHome; }
     return env;
   }
 
@@ -87,7 +91,7 @@ export class PixivCliProvider implements PixivProvider {
     return new Promise((resolve, reject) => {
       const child = execFile(
         this.opts.cliPath,
-        args,
+        [...this.opts.args, ...args],
         {
           env: this.buildEnv(),
           timeout: this.opts.timeoutMs,
@@ -95,22 +99,16 @@ export class PixivCliProvider implements PixivProvider {
           shell: false,
         },
         (err, stdout, stderr) => {
-          const code = (err as { code?: number } | null)?.code ?? 0;
-          if (err && code !== 0) {
-            resolve({ stdout: String(stdout), stderr: String(stderr), code: Number(code) || 1 });
+          if (err && typeof err.code === 'string') {
+            reject(new PixivProviderError(err.code === 'ENOENT' ? 'BINARY_MISSING' : 'NETWORK', err.message));
             return;
           }
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve({ stdout: String(stdout), stderr: String(stderr), code: 0 });
+          if (err?.killed) { reject(new PixivProviderError('TIMEOUT', 'pixiv-cli timed out')); return; }
+          resolve({ stdout: String(stdout), stderr: String(stderr), code: err ? Number(err.code) || 1 : 0 });
         }
       );
-      if (input !== undefined && child.stdin) {
-        child.stdin.write(input);
-        child.stdin.end();
-      }
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(input ?? '');
     });
   }
 
@@ -123,16 +121,7 @@ export class PixivCliProvider implements PixivProvider {
       throw classifyStderr(res.stderr, res.code);
     }
     try {
-      const parsed = JSON.parse(res.stdout || '[]');
-      const list = Array.isArray(parsed) ? parsed : parsed.accounts ?? [];
-      return {
-        authenticated: list.length > 0,
-        accounts: list.map((a: Record<string, unknown>, i: number) => ({
-          userId: String(a.userId ?? a.id ?? a.uid ?? i),
-          name: a.name ? String(a.name) : undefined,
-          isDefault: Boolean(a.isDefault ?? a.default ?? i === 0),
-        })),
-      };
+      return parseAccounts(JSON.parse(res.stdout || '{}'));
     } catch {
       return { authenticated: false, accounts: [] };
     }
@@ -152,22 +141,23 @@ export class PixivCliProvider implements PixivProvider {
         break;
       }
       case 'ranking': {
-        args.push('ranking', '--mode', q.mode ?? 'day', '--json');
+        args.push('ranking', '--mode', q.mode ?? 'day', '--ndjson');
         if (q.date) args.push('--date', q.date);
+        if (q.limit) args.push('--limit', String(q.limit));
         break;
       }
       case 'user': {
-        args.push('user', q.userId ?? '', '--json');
+        args.push('user', 'artworks', ...(q.userId ? [q.userId] : []), '--ndjson');
         if (q.limit) args.push('--limit', String(q.limit));
         break;
       }
       case 'bookmarks': {
-        args.push('bookmark', 'list', '--json');
+        args.push('bookmark', 'list', ...(q.userId ? [q.userId] : []), '--ndjson');
         if (q.limit) args.push('--limit', String(q.limit));
         break;
       }
       default:
-        args.push('search', q.word ?? '', '--ndjson', '--limit', String(q.limit ?? 10));
+        args.push('recommended', '--type', 'artwork', '--ndjson', '--limit', String(q.limit));
     }
     return args;
   }
@@ -176,42 +166,18 @@ export class PixivCliProvider implements PixivProvider {
     const res = await this.exec(this.mapQueryArgs(q));
     if (res.code !== 0) throw classifyStderr(res.stderr, res.code);
     const lines = res.stdout.split('\n').filter((l) => l.trim());
-    for (const line of lines) {
-      try {
-        const raw = JSON.parse(line);
-        yield this.normalizeWork(raw);
-      } catch {
-        // skip malformed NDJSON lines
-      }
+    for (const line of lines.slice(0, q.limit)) {
+      let raw: Record<string, unknown>;
+      try { raw = JSON.parse(line); }
+      catch { throw new PixivProviderError('PROTOCOL', 'Invalid pixiv-cli NDJSON'); }
+      yield normalizeWork(raw);
     }
   }
 
-  private normalizeWork(raw: Record<string, unknown>): PixivWork {
-    return {
-      id: String(raw.id ?? raw.illust_id ?? ''),
-      type: (raw.type as PixivWork['type']) ?? 'illust',
-      title: String(raw.title ?? ''),
-      authorId: String(raw.userId ?? raw.user_id ?? raw.authorId ?? ''),
-      authorName: String(raw.userName ?? raw.user_name ?? raw.authorName ?? ''),
-      tags: Array.isArray(raw.tags)
-        ? (raw.tags as unknown[]).map((t) => (typeof t === 'string' ? t : String((t as { name?: string }).name ?? t)))
-        : [],
-      createdAt: String(raw.createDate ?? raw.create_date ?? raw.createdAt ?? new Date().toISOString()),
-      bookmarks: Number(raw.bookmarkCount ?? raw.total_bookmarks ?? raw.bookmarks ?? 0),
-      views: Number(raw.viewCount ?? raw.total_view ?? raw.views ?? 0),
-      pageCount: Number(raw.pageCount ?? raw.page_count ?? 1),
-      xRestrict: (Number(raw.xRestrict ?? raw.x_restrict ?? 0) as 0 | 1 | 2),
-      aiType: raw.aiType !== undefined ? Number(raw.aiType) : undefined,
-      url: String(raw.url ?? `https://www.pixiv.net/artworks/${raw.id ?? ''}`),
-      width: raw.width !== undefined ? Number(raw.width) : undefined,
-      height: raw.height !== undefined ? Number(raw.height) : undefined,
-    };
-  }
-
   async detail(id: string): Promise<PixivWork> {
-    const res = await this.exec(['illust', id, '--json']);
+    const res = await this.exec(['detail', id, '--json']);
     if (res.code !== 0) throw classifyStderr(res.stderr, res.code);
-    return this.normalizeWork(JSON.parse(res.stdout));
+    return normalizeWork(JSON.parse(res.stdout));
   }
 
   async download(
@@ -225,8 +191,8 @@ export class PixivCliProvider implements PixivProvider {
       .map((w) =>
         JSON.stringify(
           typeof w === 'string'
-            ? { id: w, url: `https://www.pixiv.net/artworks/${w}` }
-            : { id: w.id, url: w.url }
+            ? { id: w, type: 'illust', url: `https://www.pixiv.net/artworks/${w}` }
+            : { id: w.id, type: w.type, url: w.url }
         )
       )
       .join('\n');
@@ -242,7 +208,7 @@ export class PixivCliProvider implements PixivProvider {
     ];
     if (opts?.quality) args.push('--quality', opts.quality);
     if (opts?.pages) args.push('--pages', opts.pages);
-    if (opts?.ugoira) args.push('--ugoira', opts.ugoira);
+    if (opts?.ugoira) args.push('--ugoira-mode', opts.ugoira);
 
     const res = await this.exec(args, ndjson + '\n');
     const warnings: string[] = [];
@@ -251,19 +217,20 @@ export class PixivCliProvider implements PixivProvider {
       const err = classifyStderr(res.stderr, res.code);
       if (err.code === 'AUTH_REQUIRED') throw err;
       warnings.push(err.message);
+      failures.push(...works.map((w) => ({ workId: typeof w === 'string' ? w : w.id, code: err.code, message: err.message })));
     }
 
     const after = this.listFiles(dir);
     const files = after
       .filter((p) => !before.has(p))
       .map((p) => {
-        const base = p.split('/').pop() ?? p;
+        const base = basename(p);
         const m = base.match(/^(.+)_p(\d+)/);
         return {
           path: p,
           workId: m ? m[1] : base,
           page: m ? Number(m[2]) : 0,
-          mime: 'image/png',
+          mime: ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' } as Record<string, string>)[extname(p)],
           size: existsSync(p) ? statSync(p).size : 0,
         };
       });
@@ -273,7 +240,7 @@ export class PixivCliProvider implements PixivProvider {
 
   private listFiles(dir: string): string[] {
     try {
-      return readdirSync(dir).map((f) => join(dir, f));
+      return readdirSync(dir, { withFileTypes: true }).flatMap((f) => f.isDirectory() ? this.listFiles(join(dir, f.name)) : [join(dir, f.name)]);
     } catch {
       return [];
     }

@@ -41,7 +41,7 @@ async function randomDownload() {
 
     const auth = new PixivAuth(config.pixiv, config.network!, database, configPath);
     const pixivClient = new PixivClient(auth, config);
-    const fileService = new FileService(config.storage!);
+    const fileService = new FileService(config.storage!, config.runtime?.timezone);
     const downloadManager = new DownloadManager(tempConfig, pixivClient, database, fileService);
 
     await downloadManager.initialise();

@@ -39,6 +39,7 @@ export function createPixivProvider(opts: CreateProviderOptions = {}): PixivProv
       return new PixivMcpProvider({
         command: resolvePixivCliPath(opts.cliPath),
         args: ['mcp'],
+        env: (opts.cliHome ?? resolvePixivCliHome()) ? { HOME: (opts.cliHome ?? resolvePixivCliHome())!, USERPROFILE: (opts.cliHome ?? resolvePixivCliHome())! } : undefined,
       });
     }
     case 'legacy': {

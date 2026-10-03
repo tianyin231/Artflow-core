@@ -19,6 +19,17 @@ describe('subtitles', () => {
     expect(ass).toContain('Dialogue:');
     expect(ass).toContain('Noto Sans CJK SC');
   });
+
+  it('carries rounded milliseconds and centiseconds across minute boundaries', () => {
+    expect(toSrt([{ startSec: 59.9999, endSec: 60.5, text: 'hello' }])).toContain('00:01:00,000');
+    expect(toAss([{ startSec: 59.9999, endSec: 60.5, text: 'hello\nworld' }])).toContain('0:01:00.00');
+    expect(toAss([{ startSec: 0, endSec: 1, text: 'hello\nworld' }])).toContain('hello\\Nworld');
+  });
+
+  it('rejects malformed SRT timestamps instead of treating them as zero', () => {
+    expect(validateSrt('1\ninvalid --> invalid\ntext').ok).toBe(false);
+    expect(validateSrt('1\r\n00:00:00,000 --> 00:00:01,000\r\ntext\r\n').ok).toBe(true);
+  });
 });
 
 describe('transitions', () => {
@@ -47,6 +58,11 @@ describe('beat snap', () => {
     expect(cuts[0]).toBe(0);
     expect(cuts[1]).toBeCloseTo(0.5, 2);
     expect(meanDeviationMs).toBeLessThanOrEqual(40);
+  });
+
+  it.each([0, -1, NaN, Infinity])('rejects a BPM that cannot advance the grid: %s', (bpm) => {
+    expect(() => buildBeatGrid(bpm, 10)).toThrow('Beat grid');
+    expect(() => clickOnsets(bpm, 10)).toThrow('Beat grid');
   });
 });
 

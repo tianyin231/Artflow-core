@@ -1,8 +1,10 @@
 /**
  * Transition / camera effect recipes (F2-M3) — JSON-described, AI-plannable.
  */
+export type TransitionId = 'kenburns-zoom-in' | 'kenburns-pan-left' | 'crossfade' | 'push-left' | 'wipe-right' | 'flash-white' | 'blur-in' | 'zoom-out';
+
 export interface TransitionRecipe {
-  id: string;
+  id: TransitionId;
   name: string;
   kind: 'kenburns' | 'crossfade' | 'push' | 'wipe' | 'flash' | 'blur' | 'zoom' | 'slide';
   durationMs: number;
