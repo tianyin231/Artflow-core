@@ -1,7 +1,8 @@
 /**
- * Persistent SQLite job queue (F2-M2). No Redis.
+ * In-process job queue with a pluggable store and an in-memory implementation.
  */
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 
 export type JobKind = 'download' | 'render' | 'publish' | 'workflow';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'dead' | 'cancelled';
@@ -15,6 +16,7 @@ export interface JobRow {
   maxAttempts: number;
   nextRunAt: number;
   leaseUntil: number | null;
+  leaseToken: string | null;
   lastError: string | null;
   idempotencyKey: string | null;
   createdAt: number;
@@ -33,12 +35,13 @@ export interface JobStore {
   insert(job: JobRow): void;
   get(id: string): JobRow | null;
   findByIdempotencyKey(key: string): JobRow | null;
-  claimDue(limit: number, now: number, kind?: JobKind): JobRow[];
-  heartbeat(id: string, leaseUntil: number): void;
-  complete(id: string, now: number): void;
-  fail(id: string, error: string, nextRunAt: number, now: number): void;
-  dead(id: string, error: string, now: number): void;
+  claimDue(limit: number, now: number, kind?: JobKind, leaseMs?: number): JobRow[];
+  heartbeat(id: string, leaseUntil: number, leaseToken?: string): void;
+  complete(id: string, now: number, leaseToken?: string): void;
+  fail(id: string, error: string, nextRunAt: number, now: number, leaseToken?: string): void;
+  dead(id: string, error: string, now: number, leaseToken?: string): void;
   cancel(id: string, now: number): void;
+  replay(id: string, now: number): void;
   requeueExpired(now: number): number;
   countByStatus(): Record<JobStatus, number>;
   listByStatus(status: JobStatus, limit: number): JobRow[];
@@ -50,6 +53,7 @@ export class MemoryJobStore implements JobStore {
   private map = new Map<string, JobRow>();
 
   insert(job: JobRow): void {
+    if (this.map.has(job.id)) throw new Error(`duplicate job id: ${job.id}`);
     this.map.set(job.id, { ...job });
   }
   get(id: string): JobRow | null {
@@ -61,7 +65,7 @@ export class MemoryJobStore implements JobStore {
     }
     return null;
   }
-  claimDue(limit: number, now: number, kind?: JobKind): JobRow[] {
+  claimDue(limit: number, now: number, kind?: JobKind, leaseMs = 30_000): JobRow[] {
     const max = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
     const out: JobRow[] = [];
     if (max === 0) return out;
@@ -70,41 +74,51 @@ export class MemoryJobStore implements JobStore {
       if (kind && j.kind !== kind) continue;
       if (j.status === 'queued' && j.nextRunAt <= now && (j.leaseUntil === null || j.leaseUntil <= now)) {
         j.status = 'running';
-        j.leaseUntil = now + 30_000;
+        j.attempts += 1;
+        j.leaseUntil = now + leaseMs;
+        j.leaseToken = randomUUID();
+        j.updatedAt = now;
         out.push({ ...j });
       }
     }
     return out;
   }
-  heartbeat(id: string, leaseUntil: number): void {
+  heartbeat(id: string, leaseUntil: number, leaseToken?: string): void {
     const j = this.map.get(id);
-    if (j) j.leaseUntil = leaseUntil;
+    if (j?.status === 'running' && (leaseToken === undefined || j.leaseToken === leaseToken)) {
+      j.leaseUntil = leaseUntil;
+    }
   }
-  complete(id: string, now: number): void {
+  private owns(j: JobRow | undefined, leaseToken?: string): j is JobRow {
+    return Boolean(j && j.status === 'running' && (leaseToken === undefined || j.leaseToken === leaseToken));
+  }
+  complete(id: string, now: number, leaseToken?: string): void {
     const j = this.map.get(id);
-    if (j) {
+    if (this.owns(j, leaseToken)) {
       j.status = 'succeeded';
       j.leaseUntil = null;
+      j.leaseToken = null;
       j.updatedAt = now;
     }
   }
-  fail(id: string, error: string, nextRunAt: number, now: number): void {
+  fail(id: string, error: string, nextRunAt: number, now: number, leaseToken?: string): void {
     const j = this.map.get(id);
-    if (j) {
+    if (j && (leaseToken === undefined || this.owns(j, leaseToken))) {
       j.status = 'queued';
-      j.attempts += 1;
       j.lastError = error;
       j.nextRunAt = nextRunAt;
       j.leaseUntil = null;
+      j.leaseToken = null;
       j.updatedAt = now;
     }
   }
-  dead(id: string, error: string, now: number): void {
+  dead(id: string, error: string, now: number, leaseToken?: string): void {
     const j = this.map.get(id);
-    if (j) {
+    if (j && (leaseToken === undefined || this.owns(j, leaseToken))) {
       j.status = 'dead';
       j.lastError = error;
       j.leaseUntil = null;
+      j.leaseToken = null;
       j.updatedAt = now;
     }
   }
@@ -113,6 +127,19 @@ export class MemoryJobStore implements JobStore {
     if (j && (j.status === 'queued' || j.status === 'running')) {
       j.status = 'cancelled';
       j.leaseUntil = null;
+      j.leaseToken = null;
+      j.updatedAt = now;
+    }
+  }
+  replay(id: string, now: number): void {
+    const j = this.map.get(id);
+    if (j && ['dead', 'failed', 'cancelled'].includes(j.status)) {
+      j.status = 'queued';
+      j.attempts = 0;
+      j.nextRunAt = now;
+      j.leaseUntil = null;
+      j.leaseToken = null;
+      j.lastError = null;
       j.updatedAt = now;
     }
   }
@@ -120,8 +147,11 @@ export class MemoryJobStore implements JobStore {
     let n = 0;
     for (const j of this.map.values()) {
       if (j.status === 'running' && j.leaseUntil !== null && j.leaseUntil <= now) {
-        j.status = 'queued';
+        j.status = j.attempts >= j.maxAttempts ? 'dead' : 'queued';
+        j.lastError = 'lease expired';
         j.leaseUntil = null;
+        j.leaseToken = null;
+        j.updatedAt = now;
         n++;
       }
     }
@@ -133,7 +163,8 @@ export class MemoryJobStore implements JobStore {
     return c as Record<JobStatus, number>;
   }
   listByStatus(status: JobStatus, limit: number): JobRow[] {
-    return [...this.map.values()].filter((j) => j.status === status).slice(0, limit).map((j) => ({ ...j }));
+    const max = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+    return [...this.map.values()].filter((j) => j.status === status).slice(0, max).map((j) => ({ ...j }));
   }
   depth(): number {
     return [...this.map.values()].filter((j) => j.status === 'queued' || j.status === 'running').length;
@@ -143,7 +174,7 @@ export class MemoryJobStore implements JobStore {
 export type JobHandler = (job: JobRow, signal: AbortSignal) => Promise<void>;
 
 export interface QueueOptions {
-  concurrency?: Record<JobKind, number>;
+  concurrency?: Partial<Record<JobKind, number>>;
   maxAttempts?: number;
   baseDelayMs?: number;
   leaseMs?: number;
@@ -161,7 +192,7 @@ export class JobQueue extends EventEmitter {
   private running = 0;
   private byKind: Record<string, number> = {};
   private handlers = new Map<JobKind, JobHandler>();
-  private aborts = new Map<string, AbortController>();
+  private active = new Map<string, { controller: AbortController; token: string; heartbeat: NodeJS.Timeout }>();
   private timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -169,6 +200,18 @@ export class JobQueue extends EventEmitter {
     private readonly opts: QueueOptions = {}
   ) {
     super();
+    for (const [name, value] of Object.entries(opts.concurrency ?? {})) {
+      if (!Number.isInteger(value) || value < 0) throw new Error(`invalid concurrency for ${name}`);
+    }
+    if (!Number.isInteger(opts.maxAttempts ?? 3) || (opts.maxAttempts ?? 3) < 1) {
+      throw new Error('maxAttempts must be a positive integer');
+    }
+    if (!Number.isFinite(opts.leaseMs ?? 30_000) || (opts.leaseMs ?? 30_000) <= 0) {
+      throw new Error('leaseMs must be positive');
+    }
+    if (!Number.isFinite(opts.baseDelayMs ?? 500) || (opts.baseDelayMs ?? 500) < 0) {
+      throw new Error('baseDelayMs must be nonnegative');
+    }
   }
 
   register(kind: JobKind, handler: JobHandler): void {
@@ -177,19 +220,29 @@ export class JobQueue extends EventEmitter {
 
   enqueue(opts: EnqueueOptions): JobRow {
     const now = (this.opts.now ?? Date.now)();
-    if (opts.idempotencyKey) {
+    const maxAttempts = opts.maxAttempts ?? this.opts.maxAttempts ?? 3;
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new Error('maxAttempts must be a positive integer');
+    if (!Number.isFinite(opts.nextRunAt ?? now)) throw new Error('nextRunAt must be finite');
+    if (opts.idempotencyKey !== undefined) {
+      if (typeof opts.idempotencyKey !== 'string' || !opts.idempotencyKey.trim()) {
+        throw new Error('idempotencyKey must be a nonempty string');
+      }
       const existing = this.store.findByIdempotencyKey(opts.idempotencyKey);
       if (existing) return existing;
     }
+    if (!(opts.kind in DEFAULT_CONCURRENCY)) throw new Error('invalid job kind');
+    const payload = JSON.stringify(opts.payload ?? {});
+    if (payload === undefined) throw new Error('payload must be JSON serializable');
     const job: JobRow = {
-      id: `job_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `job_${randomUUID()}`,
       kind: opts.kind,
-      payload: JSON.stringify(opts.payload ?? {}),
+      payload,
       status: 'queued',
       attempts: 0,
-      maxAttempts: opts.maxAttempts ?? this.opts.maxAttempts ?? 3,
+      maxAttempts,
       nextRunAt: opts.nextRunAt ?? now,
       leaseUntil: null,
+      leaseToken: null,
       lastError: null,
       idempotencyKey: opts.idempotencyKey ?? null,
       createdAt: now,
@@ -210,39 +263,58 @@ export class JobQueue extends EventEmitter {
     const handler = this.handlers.get(job.kind);
     const now = (this.opts.now ?? Date.now)();
     if (!handler) {
-      this.store.dead(job.id, `no handler for ${job.kind}`, now);
-      this.emit('dead', job);
+      this.store.dead(job.id, `no handler for ${job.kind}`, now, job.leaseToken!);
+      this.emit('dead', this.store.get(job.id));
       return;
     }
     const ac = new AbortController();
-    this.aborts.set(job.id, ac);
+    const token = job.leaseToken!;
+    const leaseMs = this.opts.leaseMs ?? 30_000;
+    const heartbeat = setInterval(() => {
+      const current = this.store.get(job.id);
+      if (current?.status !== 'running' || current.leaseToken !== token) {
+        clearInterval(heartbeat);
+        ac.abort();
+        return;
+      }
+      this.store.heartbeat(job.id, (this.opts.now ?? Date.now)() + leaseMs, token);
+    }, Math.max(1, Math.floor(leaseMs / 3)));
+    heartbeat.unref?.();
+    this.active.set(job.id, { controller: ac, token, heartbeat });
     try {
       await handler(job, ac.signal);
-      this.store.complete(job.id, (this.opts.now ?? Date.now)());
-      this.emit('succeeded', job);
+      const current = this.store.get(job.id);
+      if (current?.status === 'running' && current.leaseToken === token) {
+        this.store.complete(job.id, (this.opts.now ?? Date.now)(), token);
+        this.emit('succeeded', this.store.get(job.id));
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const current = this.store.get(job.id);
-      if (!current || current.status === 'cancelled') {
-        // cancelled while running — keep cancelled
-        this.emit('cancelled', job.id);
+      if (current?.status !== 'running' || current.leaseToken !== token) {
+        // Cancellation or another owner took over while the handler ran.
         return;
       }
-      const attempts = current.attempts + 1;
+      const attempts = current.attempts;
       if (attempts >= current.maxAttempts) {
-        this.store.dead(job.id, msg, (this.opts.now ?? Date.now)());
-        this.emit('dead', job);
+        this.store.dead(job.id, msg, (this.opts.now ?? Date.now)(), token);
+        this.emit('dead', this.store.get(job.id));
       } else {
-        this.store.fail(job.id, msg, (this.opts.now ?? Date.now)() + this.backoff(attempts), (this.opts.now ?? Date.now)());
-        this.emit('failed', job);
+        this.store.fail(job.id, msg, (this.opts.now ?? Date.now)() + this.backoff(attempts), (this.opts.now ?? Date.now)(), token);
+        this.emit('failed', this.store.get(job.id));
       }
     } finally {
-      this.aborts.delete(job.id);
+      clearInterval(heartbeat);
+      if (this.active.get(job.id)?.token === token) this.active.delete(job.id);
     }
   }
 
   async tick(): Promise<number> {
-    this.store.requeueExpired((this.opts.now ?? Date.now)());
+    const now = (this.opts.now ?? Date.now)();
+    for (const [id, active] of this.active) {
+      if (!active.controller.signal.aborted) this.store.heartbeat(id, now + (this.opts.leaseMs ?? 30_000), active.token);
+    }
+    this.store.requeueExpired(now);
     const concurrency = { ...DEFAULT_CONCURRENCY, ...(this.opts.concurrency ?? {}) };
     let started = 0;
     for (const kind of Object.keys(concurrency) as JobKind[]) {
@@ -250,7 +322,7 @@ export class JobQueue extends EventEmitter {
       const used = this.byKind[kind] ?? 0;
       const can = Math.max(0, Math.floor(limit) - used);
       if (can === 0) continue;
-      const jobs = this.store.claimDue(can, (this.opts.now ?? Date.now)(), kind);
+      const jobs = this.store.claimDue(can, (this.opts.now ?? Date.now)(), kind, this.opts.leaseMs ?? 30_000);
       for (const job of jobs) {
         this.byKind[kind] = (this.byKind[kind] ?? 0) + 1;
         this.running++;
@@ -266,6 +338,7 @@ export class JobQueue extends EventEmitter {
 
   start(intervalMs = 200): void {
     if (this.timer) return;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new Error('intervalMs must be positive');
     this.timer = setInterval(() => {
       void this.tick();
     }, intervalMs);
@@ -275,23 +348,26 @@ export class JobQueue extends EventEmitter {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    for (const ac of this.aborts.values()) ac.abort();
-    this.aborts.clear();
+    for (const active of this.active.values()) {
+      clearInterval(active.heartbeat);
+      active.controller.abort();
+    }
   }
 
   cancel(id: string): void {
-    const ac = this.aborts.get(id);
-    if (ac) ac.abort();
     this.store.cancel(id, (this.opts.now ?? Date.now)());
-    this.emit('cancelled', id);
+    const active = this.active.get(id);
+    if (active) {
+      clearInterval(active.heartbeat);
+      active.controller.abort();
+    }
+    if (this.store.get(id)?.status === 'cancelled') this.emit('cancelled', id);
   }
 
   replay(id: string): JobRow | null {
     const job = this.store.get(id);
     if (!job) return null;
-    if (job.status === 'dead' || job.status === 'failed' || job.status === 'cancelled') {
-      this.store.fail(id, job.lastError ?? 'replay', (this.opts.now ?? Date.now)(), (this.opts.now ?? Date.now)());
-    }
+    this.store.replay(id, (this.opts.now ?? Date.now)());
     return this.store.get(id);
   }
 
